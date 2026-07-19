@@ -63,12 +63,29 @@ async function managerApi(method, path, body) {
     log(`FAILED: ${e.message}`, "err");
   }
 
-  try {
-    log("Testing /api4/bank-or-cash-accounts via postMessage protocol…");
-    const accounts = await managerApi('GET', '/api4/bank-or-cash-accounts?pageSize=5');
-    log(`SUCCESS: ${JSON.stringify(accounts)}`, "ok");
-  } catch (e) {
-    log(`FAILED: ${e.message}`, "err");
+  // Now the real target: test every Business Details candidate we've tried
+  // before via our own fetch() — but this time through Manager's own
+  // internal proxy, which just proved itself far more reliable.
+  const candidates = [
+    ["GET", "/api2/business-details"],
+    ["GET", "/api2/businessDetails"],
+    ["GET", "/api2/business"],
+    ["GET", "/api2/settings/business-details"],
+    ["GET", "/api2/business-details-form"],
+    ["GET", "/api4/business-details"],
+    ["GET", "/api4/businessDetails"],
+    ["GET", "/api4/business"],
+    ["GET", "/api4/business-details-form"]
+  ];
+
+  for (const [method, path] of candidates) {
+    try {
+      log(`Testing ${method} ${path} …`);
+      const result = await managerApi(method, path);
+      log(`SUCCESS on ${path}: ${JSON.stringify(result).slice(0, 400)}`, "ok");
+    } catch (e) {
+      log(`FAILED on ${path}: ${e.message}`, "err");
+    }
   }
 
   log("Test complete. Copy everything above back for review.");
