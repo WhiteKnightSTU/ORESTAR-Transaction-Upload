@@ -69,6 +69,7 @@ function updateDebugPanel() {
   const lines = [
     `URL: ${window.location.href}`,
     `In an iframe: ${window.self !== window.top}`,
+    `Handshakes sent so far: ${window.__handshakeCount || 0}`,
     `Messages received so far: ${window.__msgLog.length}`,
     `window.managerAppContext: ${window.managerAppContext ? JSON.stringify(Object.keys(window.managerAppContext)) : "(not set)"}`,
     `managerContext resolved: ${managerContext ? "YES" : "NO"}`

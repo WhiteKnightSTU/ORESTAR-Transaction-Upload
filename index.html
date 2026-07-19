@@ -5,18 +5,80 @@
 <script>
 // Registered as the very first thing on the page — before any other markup,
 // styles, or script parses — so we can't miss Manager's context message if
-// it's sent immediately on iframe load. Mirrors Manager's own reference
-// implementation exactly: the raw message data IS the context object.
+// it's sent immediately on iframe load.
 window.__msgLog = [];
 console.log("[ORESTAR ext] listener registered at", new Date().toISOString(), "location:", window.location.href, "in iframe:", window.self !== window.top);
 window.addEventListener("message", (event) => {
   window.__msgLog.push({ t: new Date().toISOString(), origin: event.origin, data: event.data });
   console.log("[ORESTAR ext] message received — origin:", event.origin, "data:", event.data);
-  if (event.data && typeof event.data === "object") {
-    window.managerAppContext = event.data;
+  // Tightened: only accept messages that actually look like Manager's context
+  // object (has apiEndpoint/apiAccessToken) — browser extensions like
+  // Grammarly also postMessage into every page, and a too-loose check here
+  // was mistaking that noise for real context.
+  const payload = event.data && event.data.payload ? event.data.payload : event.data;
+  if (payload && typeof payload === "object" && (payload.apiEndpoint || payload.apiAccessToken)) {
+    window.managerAppContext = payload;
     console.log("[ORESTAR ext] window.managerAppContext set to:", window.managerAppContext);
   }
 });
+
+// Handshake attempt: if Manager's newer "Custom Button" model expects the
+// extension to announce readiness before it sends context (rather than
+// firing context automatically on load, as the old passive-box extensions
+// did), broadcasting a few plausible "ready" shapes costs nothing and might
+// unblock this. Sent to window.parent since we've confirmed we're in an iframe.
+window.__handshakeCount = 0;
+function sendReadyHandshake() {
+  const shapes = [
+    { type: "ready" },
+    { type: "extension-ready" },
+    { type: "manager-extension-ready" },
+    "ready"
+  ];
+  shapes.forEach(msg => {
+    try {
+      window.parent.postMessage(msg, "*");
+      window.__handshakeCount++;
+      console.log("[ORESTAR ext] sent handshake:", msg);
+    } catch (e) {
+      console.warn("[ORESTAR ext] handshake send failed:", e.message);
+    }
+  });
+}
+sendReadyHandshake();
+// Retry a few times in case Manager's own listener wasn't ready yet either.
+setTimeout(sendReadyHandshake, 500);
+setTimeout(sendReadyHandshake, 1500);
+setTimeout(sendReadyHandshake, 3000);
+
+// Fallback: "Custom Buttons" may open their target differently than the old
+// passive iframe box did (e.g. a new tab/window instead of a child iframe) —
+// if so, postMessage has no parent frame to arrive from at all. Covering the
+// other common way an app receives a one-time token/context: URL query params
+// or the URL fragment (#...), either as individual keys or one JSON blob.
+(function tryUrlContext() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fragParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const get = (k) => params.get(k) || fragParams.get(k);
+
+    const blob = get("context") || get("managerContext") || get("data");
+    if (blob) {
+      window.managerAppContext = JSON.parse(decodeURIComponent(blob));
+      console.log("[ORESTAR ext] context found in URL (JSON blob):", window.managerAppContext);
+      return;
+    }
+    const apiEndpoint = get("apiEndpoint") || get("api_endpoint");
+    const apiAccessToken = get("apiAccessToken") || get("api_access_token") || get("token");
+    if (apiEndpoint && apiAccessToken) {
+      window.managerAppContext = { apiEndpoint, apiAccessToken };
+      console.log("[ORESTAR ext] context found in URL (individual params):", window.managerAppContext);
+    }
+  } catch (e) {
+    console.warn("[ORESTAR ext] URL context parse failed:", e.message);
+  }
+})();
+</script>
 </script>
 <title>ORESTAR Export — Manager.io Extension</title>
 <style>
