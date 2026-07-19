@@ -240,15 +240,56 @@ document.getElementById("testConnBtn").addEventListener("click", async () => {
 });
 
 function getCustomFieldValue(detail, fieldId, kind) {
-  if (!detail || !detail.CustomFields2 || !fieldId) return undefined;
-  const cf = detail.CustomFields2;
+  if (!detail || !fieldId) return undefined;
+  // Case uncertainty: /api2 examples we've confirmed use "CustomFields2" /
+  // "Strings" (PascalCase); a more recent third-party writeup describes
+  // "customFields2" / "decimals" (camelCase) for /api3-/api4-style payloads.
+  // Check both rather than betting on one.
+  const cf = detail.CustomFields2 || detail.customFields2;
+  if (!cf) return undefined;
+
+  const pick = (...keys) => {
+    for (const k of keys) {
+      if (cf[k] && cf[k][fieldId] !== undefined) return cf[k][fieldId];
+    }
+    return undefined;
+  };
+
   if (kind === "checkbox") {
-    return (cf.Checkboxes && cf.Checkboxes[fieldId]) ?? (cf.Booleans && cf.Booleans[fieldId]);
+    return pick("Checkboxes", "checkboxes", "Booleans", "booleans");
   }
   if (kind === "number") {
-    return (cf.Decimals && cf.Decimals[fieldId]) ?? (cf.Numbers && cf.Numbers[fieldId]) ?? (cf.Strings && cf.Strings[fieldId]);
+    return pick("Decimals", "decimals", "Numbers", "numbers", "Strings", "strings");
   }
-  return cf.Strings && cf.Strings[fieldId];
+  return pick("Strings", "strings");
+}
+
+// One-off experimental test for a specific new candidate ("business-details-form",
+// no trailing key) suggested from a third-party writeup — NOT otherwise trusted,
+// since that writeup also claimed /api4/custom-fields doesn't exist, which we've
+// directly disproved with our own testing. Testing this one lead cheaply rather
+// than dismissing or re-building the whole auto-fetch mechanism around it.
+async function testBusinessDetailsForm() {
+  const results = [];
+  try {
+    const data = await apiGet("/business-details-form");
+    results.push(`api2 /business-details-form — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
+    console.log("[ORESTAR] api2 /business-details-form raw response:", data);
+  } catch (e) {
+    results.push(`api2 /business-details-form — ${e.message}`);
+  }
+  if (getBusinessName()) {
+    try {
+      const data = await apiGetV4("/business-details-form");
+      results.push(`api4 /business-details-form — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
+      console.log("[ORESTAR] api4 /business-details-form raw response:", data);
+    } catch (e) {
+      results.push(`api4 /business-details-form — ${e.message}`);
+    }
+  } else {
+    results.push("api4 /business-details-form — skipped (set Business Name first)");
+  }
+  return results;
 }
 
 // Endpoint confirmed by user: "bank-or-cash-account" is the combined resource
@@ -305,6 +346,16 @@ document.getElementById("listFieldsBtn").addEventListener("click", async () => {
   } catch (e) {
     el.innerHTML = `<span class="small">Failed: ${escapeXml(e.message)}</span>`;
   }
+});
+
+document.getElementById("testBizFormBtn").addEventListener("click", async () => {
+  if (!hasConnection()) {
+    showStatus("err", "Fill in Base URL and Access Token, and Test Connection first.");
+    return;
+  }
+  showStatus("pending", "Testing business-details-form…");
+  const results = await testBusinessDetailsForm();
+  showStatus(results.some(r => r.includes("SUCCESS")) ? "ok" : "err", results.join("\n"));
 });
 
 document.getElementById("discoverBtn").addEventListener("click", async () => {
