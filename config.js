@@ -10,11 +10,11 @@
 const ORESTAR_CONFIG = {
   // Number-type field on Business Details holding your ORESTAR committee ID.
   FILER_ID_FIELD_NAME: "PAC ID #",
-
+ 
   // Text-type field name — same name used on both Receipts and Payments,
   // but they're two separate field definitions; matched by name + placement.
-  TYPE_SUBTYPE_FIELD_NAME: "Type - Subtype",
-
+  TYPE_SUBTYPE_FIELD_NAME: "Transaction Type",
+ 
   // Number-type field (same style as PAC ID #), placed on both Receipts and
   // Payments as a single shared field. Empty/null = not yet exported.
   TRANSACTION_ID_FIELD_NAME: "Transaction ID"
