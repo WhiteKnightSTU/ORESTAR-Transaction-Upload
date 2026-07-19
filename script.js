@@ -390,35 +390,88 @@ function extractDescription(detail, item) {
 // transaction is tied to an actual Customer or Supplier record, or as a
 // plain string otherwise. Handle both — this also fixes a crash where
 // downstream code assumed it was always a string.
-function extractContactName(detail, item) {
-  // Confirmed from a real API response: the actual fields are lowercase
+// Cache of resolved names by key, so the same repeated Customer/Supplier
+// isn't looked up again for every transaction that references it.
+let contactNameCache = {};
+
+// customer/supplier/contact come back as bare key strings (confirmed from a
+// real export where the raw GUID ended up in the XML's business-name field)
+// pointing at a separate record, not inline reference objects with a name.
+// Resolve by fetching that record's own "-form" endpoint, same pattern as
+// receipt-form/payment-form. Endpoint names for these are unconfirmed —
+// trying the type-hinted one first, falling back to the others if it 404s.
+async function resolveKeyToName(key, hintedEndpoint) {
+  if (!key) return null;
+  if (contactNameCache[key]) return contactNameCache[key];
+
+  const endpoints = [hintedEndpoint, "customer-form", "supplier-form", "employee-form", "contact-form"]
+    .filter(function(e, i, arr) { return e && arr.indexOf(e) === i; }); // unique, hinted one first
+
+  for (let i = 0; i < endpoints.length; i++) {
+    try {
+      const rec = await managerApi("GET", "/api2/" + endpoints[i] + "/" + key);
+      const name = rec.Name || rec.name;
+      if (name) {
+        contactNameCache[key] = name;
+        return name;
+      }
+    } catch (e) {
+      // try the next candidate endpoint
+    }
+  }
+  return null;
+}
+
+async function extractContactName(detail, item) {
+  // Confirmed from a real export: the actual fields are lowercase
   // "customer" / "supplier" / "contact" — exactly one of these three is
-  // populated depending on who the transaction is with. Old guesses
-  // (Payee/Payer/Name) kept as a fallback in case a record type uses those
-  // instead, but the real ones go first.
-  const candidates = [
-    detail && detail.customer, detail && detail.supplier, detail && detail.contact,
-    detail && detail.Customer, detail && detail.Supplier, detail && detail.Contact,
-    item && item.customer, item && item.supplier, item && item.contact,
+  // populated depending on who the transaction is with, and each is a bare
+  // key string, not an inline name. Old guesses (Payee/Payer/Name) kept as
+  // a last-resort fallback in case a different record type uses those.
+  const refPairs = [
+    [detail && detail.customer, "customer-form"],
+    [detail && detail.supplier, "supplier-form"],
+    [detail && detail.contact, "contact-form"],
+    [detail && detail.employee, "employee-form"],
+    [detail && detail.Customer, "customer-form"],
+    [detail && detail.Supplier, "supplier-form"],
+    [detail && detail.Contact, "contact-form"],
+    [detail && detail.Employee, "employee-form"],
+    [item && item.customer, "customer-form"],
+    [item && item.supplier, "supplier-form"],
+    [item && item.contact, "contact-form"]
+  ];
+  for (let i = 0; i < refPairs.length; i++) {
+    const ref = refPairs[i][0], hint = refPairs[i][1];
+    if (!ref) continue;
+    let key = null, inlineName = null;
+    if (typeof ref === "string") {
+      key = ref;
+    } else if (typeof ref === "object") {
+      key = ref.key || ref.Key;
+      inlineName = ref.name || ref.Name;
+    }
+    if (inlineName) return inlineName;
+    const resolved = await resolveKeyToName(key, hint);
+    if (resolved) return resolved;
+  }
+
+  // Older, never-fully-confirmed field-name guesses, treated as already
+  // being plain display text rather than keys needing a lookup.
+  const plainTextCandidates = [
     detail && detail.Payee, detail && detail.Payer, detail && detail.Name,
     item && item.Payee, item && item.Payer, item && item.Name
   ];
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    if (!c) continue;
-    if (typeof c === "string") return c;
-    if (typeof c === "object") {
-      const n = c.name || c.Name;
-      if (n) return n;
-    }
+  for (let i = 0; i < plainTextCandidates.length; i++) {
+    if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) return plainTextCandidates[i];
   }
-  // None of customer/supplier/contact (or the older field-name guesses) had
-  // anything — genuinely no linked party. Fall back to a per-record unique
-  // placeholder rather than one shared "(unnamed)" string, so multiple
-  // different blank transactions don't all get merged into a single contact
-  // entry (editing one would otherwise silently edit them all).
-  const key = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return "(no contact - " + String(key).slice(0, 8) + ")";
+
+  // None of the above had anything — genuinely no linked party. Fall back
+  // to a per-record unique placeholder rather than one shared string, so
+  // multiple different blank transactions don't get merged into a single
+  // contact entry (editing one would otherwise silently edit them all).
+  const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
+  return "(no contact - " + String(fallbackKey).slice(0, 8) + ")";
 }
 
 function extractAccountRef(item, detail) {
@@ -465,7 +518,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const tranDate = dateOnly(detail.Date || item.Date || item.date);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
     const amount = extractAmount(detail, item);
-    const contactName = extractContactName(detail, item);
+    const contactName = await extractContactName(detail, item);
     const description = extractDescription(detail, item);
 
     if (!loggedSample[sourceLabel]) {
