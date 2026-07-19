@@ -237,17 +237,22 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async funct
     }
 
     const cfFiler = document.getElementById("cfFiler").value.trim();
+    let filerNote = "";
     if (cfFiler) {
       try {
         const filerId = await fetchFilerId(cfFiler);
         document.getElementById("resolvedFilerId").value = filerId;
+        filerNote = " Filer ID resolved: " + filerId + ".";
       } catch (e) {
         document.getElementById("resolvedFilerId").value = "";
         showStatus("err", "Accounts loaded, but Filer ID lookup failed: " + e.message);
         return;
       }
+    } else {
+      document.getElementById("resolvedFilerId").value = "";
+      filerNote = " Filer ID field GUID is empty — fill it in above and click this button again to resolve it.";
     }
-    showStatus("ok", "Loaded " + availableAccounts.length + " account(s). Uncheck any you want to exclude, then load transactions.");
+    showStatus("ok", "Loaded " + availableAccounts.length + " account(s)." + filerNote);
   } catch (err) {
     showStatus("err", "Failed to load accounts: " + err.message);
   }
