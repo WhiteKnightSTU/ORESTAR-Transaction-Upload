@@ -47,55 +47,60 @@ const CONTACT_TYPES = [
 
 /* ============================================================ */
 
-let managerContext = null;
 let loadedTransactions = []; // { source, key, formPath, date, enteredDate, accountName, amount, contactName, typeCode, subCode, description, paymentMethod, checkNo }
 let contactsByName = {};
 let availableAccounts = [];  // { key, name, kind: 'bank'|'cash' }
 
-// Poll the global that our head-level listener populates (see top of file).
-// Polling — rather than relying on a single event — covers both a message
-// that arrived before this script ran, and one that arrives slightly late.
-function syncManagerContext() {
-  if (window.managerAppContext && window.managerAppContext.apiEndpoint) {
-    managerContext = window.managerAppContext;
-    document.getElementById("configWarning").style.display = "none";
-    return true;
-  }
-  return false;
-}
+/* ============================================================
+   Connection config — persisted in this browser's localStorage
+   instead of coming from Manager's injected iframe context. This
+   page can now be opened directly (bookmark, new tab) rather than
+   depending on the Custom Buttons/Extensions embed mechanism.
+   ============================================================ */
+const STORAGE_KEY = "orestar_export_config";
 
-function updateDebugPanel() {
-  const el = document.getElementById("debugPanel");
-  const lines = [
-    `URL: ${window.location.href}`,
-    `In an iframe: ${window.self !== window.top}`,
-    `Handshakes sent so far: ${window.__handshakeCount || 0}`,
-    `Messages received so far: ${window.__msgLog.length}`,
-    `window.managerAppContext: ${window.managerAppContext ? JSON.stringify(Object.keys(window.managerAppContext)) : "(not set)"}`,
-    `managerContext resolved: ${managerContext ? "YES" : "NO"}`
-  ];
-  if (window.__msgLog.length > 0) {
-    lines.push("Last message origin/shape: " + window.__msgLog[window.__msgLog.length - 1].origin + " -> " +
-      JSON.stringify(window.__msgLog[window.__msgLog.length - 1].data).slice(0, 300));
+function loadStoredConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+  } catch (e) {
+    return {};
   }
-  el.textContent = lines.join("\n");
 }
-setInterval(updateDebugPanel, 500);
-updateDebugPanel();
-
-let contextPollCount = 0;
-const contextPollTimer = setInterval(() => {
-  contextPollCount++;
-  if (syncManagerContext() || contextPollCount > 40) { // ~8s at 200ms
-    clearInterval(contextPollTimer);
-    if (!managerContext) {
-      const el = document.getElementById("configWarning");
-      el.style.display = "block";
-      el.textContent = "No context received from Manager after 8 seconds. Double-check: this file is opened via its registered Extension placement (not a direct URL/bookmark), and the Placement path in Settings > Extensions matches a page you're actually viewing. See the debug panel above for details — copy it back if you need help.";
-    }
+function saveConfig() {
+  const cfg = {
+    baseUrl: document.getElementById("baseUrl").value.trim(),
+    apiToken: document.getElementById("apiToken").value.trim(),
+    cfFiler: document.getElementById("cfFiler").value.trim(),
+    cfTypeSubtype: document.getElementById("cfTypeSubtype").value.trim(),
+    cfDownloaded: document.getElementById("cfDownloaded").value.trim()
+  };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+  } catch (e) {
+    console.warn("Could not save config to localStorage:", e.message);
   }
-}, 200);
-syncManagerContext(); // in case it arrived before this script even ran
+}
+(function restoreConfig() {
+  const cfg = loadStoredConfig();
+  if (cfg.baseUrl) document.getElementById("baseUrl").value = cfg.baseUrl;
+  if (cfg.apiToken) document.getElementById("apiToken").value = cfg.apiToken;
+  if (cfg.cfFiler) document.getElementById("cfFiler").value = cfg.cfFiler;
+  if (cfg.cfTypeSubtype) document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype;
+  if (cfg.cfDownloaded) document.getElementById("cfDownloaded").value = cfg.cfDownloaded;
+})();
+["baseUrl", "apiToken", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+  document.getElementById(id).addEventListener("change", saveConfig);
+});
+
+function getBaseUrl() {
+  return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
+}
+function getApiToken() {
+  return document.getElementById("apiToken").value.trim();
+}
+function hasConnection() {
+  return !!(getBaseUrl() && getApiToken());
+}
 
 function showStatus(kind, message) {
   const el = document.getElementById("status");
@@ -139,8 +144,8 @@ function localDateFromTimestamp(ts) {
 }
 
 async function apiGet(path) {
-  const res = await fetch(`${managerContext.apiEndpoint}${path}`, {
-    headers: { "Authorization": `Bearer ${managerContext.apiAccessToken}`, "accept": "application/json" }
+  const res = await fetch(`${getBaseUrl()}${path}`, {
+    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
   });
   if (!res.ok) throw new Error(`GET ${path} failed: HTTP ${res.status}`);
   return res.json();
@@ -150,20 +155,20 @@ async function apiGet(path) {
 // find. Guessing PUT (standard REST convention, matches their "-form/{key}"
 // pattern for a single record). Falls back to PATCH if PUT is rejected outright.
 async function apiUpdate(path, body) {
-  let res = await fetch(`${managerContext.apiEndpoint}${path}`, {
+  let res = await fetch(`${getBaseUrl()}${path}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${managerContext.apiAccessToken}`
+      "X-Api-Key": getApiToken()
     },
     body: JSON.stringify(body)
   });
   if (res.status === 404 || res.status === 405) {
-    res = await fetch(`${managerContext.apiEndpoint}${path}`, {
+    res = await fetch(`${getBaseUrl()}${path}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${managerContext.apiAccessToken}`
+        "X-Api-Key": getApiToken()
       },
       body: JSON.stringify(body)
     });
@@ -171,6 +176,24 @@ async function apiUpdate(path, body) {
   if (!res.ok) throw new Error(`Update ${path} failed: HTTP ${res.status}`);
   return res.json().catch(() => ({}));
 }
+
+document.getElementById("testConnBtn").addEventListener("click", async () => {
+  const el = document.getElementById("connStatus");
+  el.style.display = "block";
+  el.className = "banner";
+  el.textContent = "Testing connection…";
+  if (!hasConnection()) {
+    el.textContent = "Fill in both the Base URL and Access Token first.";
+    return;
+  }
+  try {
+    await apiGet(`/business-details-form`);
+    saveConfig();
+    el.textContent = "Connected successfully.";
+  } catch (e) {
+    el.textContent = `Connection failed: ${e.message}. Double-check the Base URL (should end in /api2, no trailing slash issues) and that the Access Token is still valid in Settings → Access Tokens.`;
+  }
+});
 
 function getCustomFieldValue(detail, fieldId, kind) {
   if (!detail || !detail.CustomFields2 || !fieldId) return undefined;
@@ -223,9 +246,8 @@ async function fetchAccounts() {
 }
 
 document.getElementById("loadAccountsBtn").addEventListener("click", async () => {
-  syncManagerContext(); // in case it arrived after the initial poll window closed
-  if (!managerContext || !managerContext.apiEndpoint) {
-    showStatus("err", "Not connected to Manager. Load this inside a registered extension slot.");
+  if (!hasConnection()) {
+    showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
     return;
   }
   const cfFiler = document.getElementById("cfFiler").value.trim();
@@ -347,9 +369,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 }
 
 document.getElementById("loadBtn").addEventListener("click", async () => {
-  syncManagerContext();
-  if (!managerContext || !managerContext.apiEndpoint) {
-    showStatus("err", "Not connected to Manager. Load this inside a registered extension slot.");
+  if (!hasConnection()) {
+    showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
     return;
   }
   const cfTypeSubtype = document.getElementById("cfTypeSubtype").value.trim();
