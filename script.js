@@ -121,8 +121,8 @@ async function resolveFieldGuids() {
   const statusEl = document.getElementById("resolvedFieldsStatus");
   const lines = [
     (resolvedGuids.filer ? "✓" : "✗") + " Filer ID (\"" + (cfg.FILER_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.filer ? "" : " — not found"),
-    (resolvedGuids.typeSubtypeReceipt ? "✓" : "✗") + " Type-Subtype / Receipts (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypeReceipt ? "" : " — not found on a field placed on Receipts"),
-    (resolvedGuids.typeSubtypePayment ? "✓" : "✗") + " Type-Subtype / Payments (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypePayment ? "" : " — not found on a field placed on Payments"),
+    (resolvedGuids.typeSubtypeReceipt ? "✓" : "✗") + " Transaction Type / Receipts (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypeReceipt ? "" : " — not found on a field placed on Receipts"),
+    (resolvedGuids.typeSubtypePayment ? "✓" : "✗") + " Transaction Type / Payments (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypePayment ? "" : " — not found on a field placed on Payments"),
     (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found")
   ];
   statusEl.innerHTML = lines.join("<br>");
@@ -233,7 +233,8 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
       return "<tr><td>" + escapeXml(name) + "</td><td>" + escapeXml(type) + "</td><td>" + escapeXml(placement) + "</td><td style=\"font-family:ui-monospace,monospace;\">" + escapeXml(guid) + "</td></tr>";
     }).join("");
     el.innerHTML = "<table><thead><tr><th>Name</th><th>Type</th><th>Placement</th><th>GUID</th></tr></thead><tbody>" + rows + "</tbody></table>" +
-      '<div class="small" style="margin-top:4px;">Copy the GUID for your Filer ID / Type-Subtype / Downloaded fields into the boxes below.</div>';
+      '<div class="small" style="margin-top:4px;">Compare these Name values against config.js — GUIDs are resolved automatically by matching on Name, so this table is the source of truth for what the real names are.</div>';
+    console.log("[ORESTAR] /api4/custom-fields raw response:", data);
   } catch (e) {
     el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
   }
