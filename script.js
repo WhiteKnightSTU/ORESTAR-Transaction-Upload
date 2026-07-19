@@ -467,6 +467,28 @@ let contactRecordCache = {};
 // trying the type-hinted one first, falling back to the others if it 404s.
 // Also pulls Occupation/Employer/Type custom fields off that same record,
 // since they live there rather than on the transaction.
+// Confirmed shape from a real Business Details response: a single string,
+// street on the first line, "City, ST ZIP" on the second — e.g.
+// "12010 SE Eastbourne Ln\nHappy Valley, OR 97086". Assuming Customer/
+// Supplier/Employee records use the same "Address" field shape.
+function parseAddressBlock(raw) {
+  if (!raw) return { street1: "", city: "", state: "", zip: "" };
+  const lines = String(raw).split(/\r?\n/).map(function(l) { return l.trim(); }).filter(Boolean);
+  const street1 = lines[0] || "";
+  let city = "", state = "", zip = "";
+  if (lines[1]) {
+    const m = lines[1].match(/^(.*),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
+    if (m) {
+      city = m[1].trim();
+      state = m[2].toUpperCase();
+      zip = m[3];
+    } else {
+      city = lines[1]; // doesn't match the expected pattern — dump it in city rather than lose it
+    }
+  }
+  return { street1: street1, city: city, state: state, zip: zip };
+}
+
 async function resolveContactRecord(key, hintedEndpoint) {
   if (!key) return null;
   if (contactRecordCache[key]) return contactRecordCache[key];
@@ -480,8 +502,14 @@ async function resolveContactRecord(key, hintedEndpoint) {
       const name = rec.Name || rec.name;
       if (!name) continue;
 
+      const addr = parseAddressBlock(rec.Address || rec.address);
+
       const result = {
         name: name,
+        street1: addr.street1,
+        city: addr.city,
+        state: addr.state,
+        zip: addr.zip,
         occupation: getCustomFieldValue(rec, resolvedGuids.occupation, "text") || "",
         employerName: getCustomFieldValue(rec, resolvedGuids.employerName, "text") || "",
         employerCity: getCustomFieldValue(rec, resolvedGuids.employerCity, "text") || "",
@@ -525,7 +553,7 @@ async function resolveContactInfo(detail, item) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) return { name: inlineName, occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+    if (inlineName) return { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
     const resolved = await resolveContactRecord(key, hint);
     if (resolved) return resolved;
   }
@@ -538,7 +566,7 @@ async function resolveContactInfo(detail, item) {
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
     if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
-      return { name: plainTextCandidates[i], occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
     }
   }
 
@@ -547,7 +575,7 @@ async function resolveContactInfo(detail, item) {
   // multiple different blank transactions don't get merged into a single
   // contact entry (editing one would otherwise silently edit them all).
   const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
 }
 
 function extractAccountRef(item, detail) {
@@ -782,6 +810,10 @@ function buildContactFromInfo(name, info) {
   if (info.employerName) base.employerName = info.employerName;
   if (info.employerCity) base.employerCity = info.employerCity;
   if (info.employerState) base.employerState = info.employerState;
+  if (info.street1) base.street1 = info.street1;
+  if (info.city) base.city = info.city;
+  if (info.state) base.state = info.state;
+  if (info.zip) base.zip = info.zip;
   return base;
 }
 
