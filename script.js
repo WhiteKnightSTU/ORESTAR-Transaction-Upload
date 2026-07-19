@@ -33,6 +33,34 @@ const SUBTYPE_TEXT_TO_CODE = {
   "Loan Received (Non-Exempt)": "NLR"
 };
 
+// Confirmed from the actual XSD's <tran-purpose> enumeration, cross-referenced
+// with descriptions from the SOS's own XML Overview doc where available.
+// "H" and "X" are valid per the schema but weren't in that (2006) doc — their
+// meaning is unconfirmed.
+const TRAN_PURPOSE_CODES = {
+  "A": { label: "Agent", requiresDescription: false },
+  "B": { label: "Broadcast Advertising (radio, TV)", requiresDescription: false },
+  "C": { label: "Cash Contributions", requiresDescription: false },
+  "E": { label: "Loan Extended", requiresDescription: false },
+  "F": { label: "Fundraising Event Expenses", requiresDescription: false },
+  "G": { label: "General Operational Expenses", requiresDescription: true },
+  "H": { label: "(undocumented)", requiresDescription: false },
+  "I": { label: "Interest Payment", requiresDescription: false },
+  "L": { label: "Literature, Brochures, Printing", requiresDescription: false },
+  "M": { label: "Management Services", requiresDescription: false },
+  "N": { label: "Newspaper and Other Periodical Advertising", requiresDescription: false },
+  "O": { label: "Other Advertising (yard signs, buttons, etc.)", requiresDescription: false },
+  "P": { label: "Postage", requiresDescription: false },
+  "R": { label: "Reimbursement for Personal Expenditures", requiresDescription: false },
+  "S": { label: "Surveys and Polls", requiresDescription: false },
+  "T": { label: "Travel Expenses", requiresDescription: true },
+  "U": { label: "Utilities", requiresDescription: false },
+  "W": { label: "Wages, Salaries, Benefits", requiresDescription: false },
+  "X": { label: "(undocumented)", requiresDescription: false },
+  "Y": { label: "Petition Circulators", requiresDescription: false },
+  "Z": { label: "Preparation and Production of Advertising", requiresDescription: false }
+};
+
 const PAYMENT_METHODS = [["","(none)"],["CHK","Check"],["ACH","Electronic Check"],["EFT","Electronic Funds Transfer"],
                           ["DC","Debit Card"],["CC","Credit Card"]];
 
@@ -104,7 +132,8 @@ let resolvedGuids = {
   contactType: null,
   notEmployed: null,
   selfEmployed: null,
-  peopleId: null
+  peopleId: null,
+  tranPurposeCandidates: []
 };
 
 // /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
@@ -171,6 +200,7 @@ async function resolveFieldGuids() {
   const notEmployedMatches = findByName(cfg.NOT_EMPLOYED_FIELD_NAME || "");
   const selfEmployedMatches = findByName(cfg.SELF_EMPLOYED_FIELD_NAME || "");
   const peopleIdMatches = findByName(cfg.PEOPLE_ID_FIELD_NAME || "");
+  const tranPurposeMatches = findByName(cfg.TRAN_PURPOSE_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
   // ("Receipt"/"Payment") — no reliable way to tell which is which from the
@@ -192,7 +222,8 @@ async function resolveFieldGuids() {
     contactType: guidOf(contactTypeMatches[0]),
     notEmployed: guidOf(notEmployedMatches[0]),
     selfEmployed: guidOf(selfEmployedMatches[0]),
-    peopleId: guidOf(peopleIdMatches[0])
+    peopleId: guidOf(peopleIdMatches[0]),
+    tranPurposeCandidates: tranPurposeMatches.map(guidOf).filter(Boolean)
   };
 
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
@@ -207,6 +238,7 @@ async function resolveFieldGuids() {
     (resolvedGuids.notEmployed ? "✓" : "✗") + " Not Employed (\"" + (cfg.NOT_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.notEmployed ? "" : " — not found"),
     (resolvedGuids.selfEmployed ? "✓" : "✗") + " Self-Employed (\"" + (cfg.SELF_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.selfEmployed ? "" : " — not found"),
     (resolvedGuids.peopleId ? "✓" : "✗") + " People ID (\"" + (cfg.PEOPLE_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.peopleId ? "" : " — not found (optional)"),
+    (resolvedGuids.tranPurposeCandidates.length > 0 ? "✓" : "✗") + " Transaction Purpose (\"" + (cfg.TRAN_PURPOSE_FIELD_NAME || "") + "\") — " + resolvedGuids.tranPurposeCandidates.length + " field(s) found (optional)",
     (resolvedGuids.occupation ? "✓" : "✗") + " Occupation (\"" + (cfg.OCCUPATION_FIELD_NAME || "") + "\")" + (resolvedGuids.occupation ? "" : " — not found"),
     (resolvedGuids.employerName ? "✓" : "✗") + " Employer Name (\"" + (cfg.EMPLOYER_NAME_FIELD_NAME || "") + "\")" + (resolvedGuids.employerName ? "" : " — not found"),
     (resolvedGuids.employerCity ? "✓" : "✗") + " Employer City (\"" + (cfg.EMPLOYER_CITY_FIELD_NAME || "") + "\")" + (resolvedGuids.employerCity ? "" : " — not found"),
@@ -393,7 +425,7 @@ function extractAmount(detail, item) {
     (item && item.Amount != null) ? item.Amount :
     (item && item.Total != null) ? item.Total : null
   );
-  if (direct) return direct;
+  if (direct) return Math.abs(direct);
 
   const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
   if (Array.isArray(lines) && lines.length > 0) {
@@ -401,7 +433,7 @@ function extractAmount(detail, item) {
     lines.forEach(function(l) {
       sum += getAmountValue(l.Amount != null ? l.Amount : l.amount) || 0;
     });
-    if (sum) return sum;
+    if (sum) return Math.abs(sum);
   }
   return 0;
 }
@@ -749,7 +781,7 @@ function extractAccountRef(item, detail) {
 
 const FETCH_PAGE_SIZE = 5000;
 
-async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, selectedKeys, forcedType, forcedSubCode) {
+async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
   const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
   const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
@@ -816,6 +848,17 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const rawCheckNo = getCustomFieldValueAny(detail, checkNumberFieldIds, "number");
     const checkNo = (rawCheckNo !== undefined && rawCheckNo !== null) ? String(rawCheckNo) : "";
 
+    const rawTranPurpose = getCustomFieldValueAny(detail, tranPurposeFieldIds, "text");
+    let tranPurposeCodes = [];
+    if (rawTranPurpose) {
+      tranPurposeCodes = String(rawTranPurpose).split(/[,;]/).map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+      const invalid = tranPurposeCodes.filter(function(c) { return !TRAN_PURPOSE_CODES[c]; });
+      if (invalid.length > 0) {
+        console.warn("[ORESTAR] " + sourceLabel + " " + key + " has unrecognized Transaction Purpose code(s): " + invalid.join(", ") + " — dropped, check spelling against the valid code list.");
+        tranPurposeCodes = tranPurposeCodes.filter(function(c) { return TRAN_PURPOSE_CODES[c]; });
+      }
+    }
+
     // If this Payment pays off one or more Purchase Invoices (filed
     // separately as Accounts Payable), it must be filed as a plain Cash
     // Expenditure regardless of any custom field, and linked back to the
@@ -848,7 +891,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       description: description,
       paymentMethod: paymentMethod,
       checkNo: checkNo,
-      apInvoiceRefs: apInvoiceRefs
+      apInvoiceRefs: apInvoiceRefs,
+      tranPurposeCodes: tranPurposeCodes
     });
   }
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
@@ -864,8 +908,8 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys);
 
     // Both endpoints below are UNCONFIRMED — inferred from the same naming
     // pattern that's worked for every other resource (receipts/payments).
@@ -874,12 +918,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
     let expenseClaimResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
     let purchaseInvoiceResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
     try {
-      expenseClaimResults = await loadCollection("/expense-claims", "/expense-claim-form", "Expense Claim", null, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys, "E", "PE");
+      expenseClaimResults = await loadCollection("/expense-claims", "/expense-claim-form", "Expense Claim", null, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys, "E", "PE");
     } catch (e) {
       console.warn("[ORESTAR] Expense Claims fetch failed (endpoint may not match your version):", e.message);
     }
     try {
-      purchaseInvoiceResults = await loadCollection("/purchase-invoices", "/purchase-invoice-form", "Purchase Invoice (AP)", null, resolvedGuids.transactionId, [], [], selectedKeys, "E", "AP");
+      purchaseInvoiceResults = await loadCollection("/purchase-invoices", "/purchase-invoice-form", "Purchase Invoice (AP)", null, resolvedGuids.transactionId, [], [], resolvedGuids.tranPurposeCandidates, selectedKeys, "E", "AP");
     } catch (e) {
       console.warn("[ORESTAR] Purchase Invoices fetch failed (endpoint may not match your version):", e.message);
     }
@@ -932,6 +976,7 @@ function renderReview() {
       "</select></td>" +
       "<td><select data-idx=\"" + idx + "\" data-field=\"subCode\"></select></td>" +
       '<td><input data-idx="' + idx + '" data-field="description" value="' + escapeXml(t.description) + '"></td>' +
+      '<td><input data-idx="' + idx + '" data-field="tranPurpose" placeholder="e.g. R or G,T" value="' + escapeXml((t.tranPurposeCodes || []).join(",")) + '"></td>' +
       "<td><select data-idx=\"" + idx + "\" data-field=\"paymentMethod\">" +
         PAYMENT_METHODS.map(function(entry) {
           const code = entry[0], label = entry[1];
@@ -948,6 +993,17 @@ function renderReview() {
     el.addEventListener("change", function(e) {
       const idx = Number(e.target.dataset.idx);
       const field = e.target.dataset.field;
+      if (field === "tranPurpose") {
+        const codes = e.target.value.split(/[,;]/).map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+        const invalid = codes.filter(function(c) { return !TRAN_PURPOSE_CODES[c]; });
+        if (invalid.length > 0) {
+          e.target.style.borderColor = "#c0392b";
+        } else {
+          e.target.style.borderColor = "";
+          loadedTransactions[idx].tranPurposeCodes = codes;
+        }
+        return;
+      }
       loadedTransactions[idx][field] = e.target.value;
       if (field === "typeCode") populateSubtypeSelect(idx);
       if (field === "contactName") {
@@ -1176,13 +1232,17 @@ function buildTransactionXml(id, contactId, t, associatedTrans) {
         return "<associated-tran><id>" + escapeXml(a.id) + "</id><complete>" + (a.complete ? "Y" : "N") + "</complete></associated-tran>";
       }).join("")
     : "";
+  const purposeXml = (t.tranPurposeCodes && t.tranPurposeCodes.length > 0)
+    ? t.tranPurposeCodes.map(function(code) { return "<tran-purpose>" + code + "</tran-purpose>"; }).join("")
+    : "";
   return "<transaction id=\"" + escapeXml(id) + "\">" +
     "<operation><add>true</add></operation>" +
     "<contact-id>" + escapeXml(contactId) + "</contact-id>" +
     "<type>" + t.typeCode + "</type>" +
     "<sub-type>" + t.subCode + "</sub-type>" +
+    purposeXml +
     (t.description ? "<description>" + escapeXml(t.description.slice(0,200)) + "</description>" : "") +
-    "<amount>" + t.amount + "</amount>" +
+    "<amount>" + Math.abs(t.amount) + "</amount>" +
     (t.paymentMethod ? "<payment-method>" + t.paymentMethod + "</payment-method>" : "") +
     "<date>" + t.date + "</date>" +
     (t.checkNo ? "<check-no>" + escapeXml(t.checkNo) + "</check-no>" : "") +
@@ -1202,6 +1262,13 @@ document.getElementById("generateBtn").addEventListener("click", function() {
   const unfilledContacts = loadedTransactions.filter(function(t) { return /^\(no contact - /.test(t.contactName); });
   if (unfilledContacts.length > 0) {
     showStatus("err", unfilledContacts.length + " transaction(s) still have a placeholder Contact Name (starts with \"(no contact - \") instead of a real name — fix those in the Contact Name column above before generating. These weren't linked to a Customer/Supplier/Contact record in Manager, so they need a name entered manually.");
+    return;
+  }
+  const missingRequiredDescription = loadedTransactions.filter(function(t) {
+    return (t.tranPurposeCodes || []).some(function(code) { return TRAN_PURPOSE_CODES[code] && TRAN_PURPOSE_CODES[code].requiresDescription; }) && !t.description;
+  });
+  if (missingRequiredDescription.length > 0) {
+    showStatus("err", missingRequiredDescription.length + " transaction(s) have a Transaction Purpose code (G or T) that requires a Description, but the Description is blank — fill those in above before generating.");
     return;
   }
   lastGeneratedFilerId = filerId;

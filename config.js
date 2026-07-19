@@ -44,5 +44,10 @@ const ORESTAR_CONFIG = {
   // a new person record on each upload. It just gives you a place to note
   // down whatever ID ORESTAR shows you, the same way Transaction ID works.
   // Leave blank if you haven't created this custom field.
-  PEOPLE_ID_FIELD_NAME: "ORESTAR People ID"
+  PEOPLE_ID_FIELD_NAME: "ORESTAR People ID",
+
+  // Text-type field, same placement pattern as Payment Method — holds one
+  // or more single-letter ORESTAR purpose codes (comma-separated if more
+  // than one), e.g. "R" or "G, T". Optional per transaction.
+  TRAN_PURPOSE_FIELD_NAME: "Transaction Purpose"
 };
