@@ -391,7 +391,15 @@ function extractDescription(detail, item) {
 // plain string otherwise. Handle both — this also fixes a crash where
 // downstream code assumed it was always a string.
 function extractContactName(detail, item) {
+  // Confirmed from a real API response: the actual fields are lowercase
+  // "customer" / "supplier" / "contact" — exactly one of these three is
+  // populated depending on who the transaction is with. Old guesses
+  // (Payee/Payer/Name) kept as a fallback in case a record type uses those
+  // instead, but the real ones go first.
   const candidates = [
+    detail && detail.customer, detail && detail.supplier, detail && detail.contact,
+    detail && detail.Customer, detail && detail.Supplier, detail && detail.Contact,
+    item && item.customer, item && item.supplier, item && item.contact,
     detail && detail.Payee, detail && detail.Payer, detail && detail.Name,
     item && item.Payee, item && item.Payer, item && item.Name
   ];
@@ -404,7 +412,13 @@ function extractContactName(detail, item) {
       if (n) return n;
     }
   }
-  return "(unnamed)";
+  // None of customer/supplier/contact (or the older field-name guesses) had
+  // anything — genuinely no linked party. Fall back to a per-record unique
+  // placeholder rather than one shared "(unnamed)" string, so multiple
+  // different blank transactions don't all get merged into a single contact
+  // entry (editing one would otherwise silently edit them all).
+  const key = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
+  return "(no contact - " + String(key).slice(0, 8) + ")";
 }
 
 function extractAccountRef(item, detail) {
