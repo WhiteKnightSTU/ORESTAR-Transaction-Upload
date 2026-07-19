@@ -623,6 +623,10 @@ async function resolveContactRecord(key, hintedEndpoint) {
 // details if nothing could be linked at all.
 async function resolveContactInfo(detail, item, sourceLabel) {
   const employeeRefs = [
+    [detail && detail.recipient, null],
+    [detail && detail.Recipient, null],
+    [item && item.recipient, null],
+    [item && item.Recipient, null],
     [detail && detail.employee, "employee-form"],
     [detail && detail.Employee, "employee-form"],
     [item && item.employee, "employee-form"],
