@@ -36,12 +36,28 @@ const SUBTYPE_TEXT_TO_CODE = {
 const PAYMENT_METHODS = [["","(none)"],["CHK","Check"],["ACH","Electronic Check"],["EFT","Electronic Funds Transfer"],
                           ["DC","Debit Card"],["CC","Credit Card"]];
 
+// Maps whatever text is in the Payment Method custom field to an ORESTAR
+// code — tries matching against both the code itself (e.g. "CHK") and the
+// label (e.g. "Check") case-insensitively. Falls back to blank (shown as
+// "(none)" in the review table) if it doesn't recognize the text, so it's
+// still visible and editable rather than silently wrong.
+function mapPaymentMethodText(raw) {
+  if (!raw) return "";
+  const text = String(raw).trim().toLowerCase();
+  for (let i = 0; i < PAYMENT_METHODS.length; i++) {
+    const code = PAYMENT_METHODS[i][0], label = PAYMENT_METHODS[i][1];
+    if (code && (code.toLowerCase() === text || label.toLowerCase() === text)) return code;
+  }
+  return "";
+}
+
 const CONTACT_TYPES = [
   ["I","Individual"], ["F","Candidate's Immediate Family"], ["B","Business Entity"],
   ["L","Labor Organization"], ["O","Other"], ["C","Political Committee"], ["P","Political Party Committee"]
 ];
 
 let loadedTransactions = [];
+let loggedSample = {}; // tracks whether we've console.logged a sample raw record per source, for diagnostics
 let contactsByName = {};
 let availableAccounts = [];
 
@@ -78,7 +94,9 @@ async function managerApi(method, path, body) {
 let resolvedGuids = {
   filer: null,
   typeSubtypeCandidates: [],
-  transactionId: null
+  transactionId: null,
+  paymentMethodCandidates: [],
+  checkNumberCandidates: []
 };
 
 // /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
@@ -135,6 +153,8 @@ async function resolveFieldGuids() {
   const filerMatches = findByName(cfg.FILER_ID_FIELD_NAME || "");
   const typeSubtypeMatches = findByName(cfg.TYPE_SUBTYPE_FIELD_NAME || "");
   const transactionIdMatches = findByName(cfg.TRANSACTION_ID_FIELD_NAME || "");
+  const paymentMethodMatches = findByName(cfg.PAYMENT_METHOD_FIELD_NAME || "");
+  const checkNumberMatches = findByName(cfg.CHECK_NUMBER_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
   // ("Receipt"/"Payment") — no reliable way to tell which is which from the
@@ -146,7 +166,9 @@ async function resolveFieldGuids() {
   resolvedGuids = {
     filer: guidOf(filerMatches[0]),
     typeSubtypeCandidates: typeSubtypeMatches.map(guidOf).filter(Boolean),
-    transactionId: guidOf(transactionIdMatches[0])
+    transactionId: guidOf(transactionIdMatches[0]),
+    paymentMethodCandidates: paymentMethodMatches.map(guidOf).filter(Boolean),
+    checkNumberCandidates: checkNumberMatches.map(guidOf).filter(Boolean)
   };
 
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
@@ -155,6 +177,8 @@ async function resolveFieldGuids() {
   const lines = [
     (resolvedGuids.filer ? "✓" : "✗") + " Filer ID (\"" + (cfg.FILER_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.filer ? "" : " — not found"),
     (resolvedGuids.typeSubtypeCandidates.length > 0 ? "✓" : "✗") + " Transaction Type (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\") — " + resolvedGuids.typeSubtypeCandidates.length + " field(s) found" + (resolvedGuids.typeSubtypeCandidates.length < 2 ? " (expected 2 — one for Receipts, one for Payments)" : ""),
+    (resolvedGuids.paymentMethodCandidates.length > 0 ? "✓" : "✗") + " Payment Method (\"" + (cfg.PAYMENT_METHOD_FIELD_NAME || "") + "\") — " + resolvedGuids.paymentMethodCandidates.length + " field(s) found",
+    (resolvedGuids.checkNumberCandidates.length > 0 ? "✓" : "✗") + " Check # (\"" + (cfg.CHECK_NUMBER_FIELD_NAME || "") + "\") — " + resolvedGuids.checkNumberCandidates.length + " field(s) found",
     (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found")
   ];
   statusEl.innerHTML = lines.join("<br>");
@@ -326,6 +350,63 @@ function selectedAccountKeys() {
     .map(function(a) { return a.key; });
 }
 
+// Amount field name/shape isn't confirmed for every record type — trying
+// common candidates plus a Lines-array fallback (summing line amounts) in
+// case there's no single top-level total.
+function extractAmount(detail, item) {
+  const direct = getAmountValue(
+    (detail && detail.Amount != null) ? detail.Amount :
+    (detail && detail.Total != null) ? detail.Total :
+    (detail && detail.TotalAmount != null) ? detail.TotalAmount :
+    (item && item.Amount != null) ? item.Amount :
+    (item && item.Total != null) ? item.Total : null
+  );
+  if (direct) return direct;
+
+  const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
+  if (Array.isArray(lines) && lines.length > 0) {
+    let sum = 0;
+    lines.forEach(function(l) {
+      sum += getAmountValue(l.Amount != null ? l.Amount : l.amount) || 0;
+    });
+    if (sum) return sum;
+  }
+  return 0;
+}
+
+function extractDescription(detail, item) {
+  const direct = (detail && detail.Description) || (item && item.Description);
+  if (direct) return direct;
+
+  const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
+  if (Array.isArray(lines) && lines.length > 0) {
+    const descs = lines.map(function(l) { return l.Description || l.description || ""; }).filter(Boolean);
+    if (descs.length > 0) return descs.join("; ");
+  }
+  return "";
+}
+
+// Payee/Payer comes back as a linked object ({key, name}) when the
+// transaction is tied to an actual Customer or Supplier record, or as a
+// plain string otherwise. Handle both — this also fixes a crash where
+// downstream code assumed it was always a string.
+function extractContactName(detail, item) {
+  const candidates = [
+    detail && detail.Payee, detail && detail.Payer, detail && detail.Name,
+    item && item.Payee, item && item.Payer, item && item.Name
+  ];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    if (!c) continue;
+    if (typeof c === "string") return c;
+    if (typeof c === "object") {
+      const n = c.name || c.Name;
+      if (n) return n;
+    }
+  }
+  return "(unnamed)";
+}
+
 function extractAccountRef(item, detail) {
   const candidates = [
     detail && detail.ReceivedIn, detail && detail.PaidFrom, detail && detail.BankAccount, detail && detail.CashAccount, detail && detail.Account,
@@ -342,7 +423,7 @@ function extractAccountRef(item, detail) {
 
 const FETCH_PAGE_SIZE = 5000;
 
-async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, selectedKeys) {
+async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, selectedKeys) {
   const results = [];
   const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
   const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
@@ -369,9 +450,15 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 
     const tranDate = dateOnly(detail.Date || item.Date || item.date);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
-    const amount = getAmountValue(detail.Amount != null ? detail.Amount : item.Amount);
-    const contactName = detail.Payee || detail.Payer || detail.Name || item.Payee || item.Payer || item.Name || "(unnamed)";
-    const description = detail.Description || item.Description || "";
+    const amount = extractAmount(detail, item);
+    const contactName = extractContactName(detail, item);
+    const description = extractDescription(detail, item);
+
+    if (!loggedSample[sourceLabel]) {
+      console.log("[ORESTAR] Sample raw " + sourceLabel + " record (list item):", item);
+      console.log("[ORESTAR] Sample raw " + sourceLabel + " record (detail):", detail);
+      loggedSample[sourceLabel] = true;
+    }
 
     let typeText = "", subtypeText = "";
     const cfValue = getCustomFieldValueAny(detail, typeSubtypeFieldIds, "text");
@@ -385,6 +472,11 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     let subCode = subtypeText ? (SUBTYPE_TEXT_TO_CODE[subtypeText] || "") : "";
     if (!subCode && typeCode) subCode = DEFAULT_SUBTYPE[typeCode] || "";
 
+    const rawPaymentMethod = getCustomFieldValueAny(detail, paymentMethodFieldIds, "text");
+    const paymentMethod = mapPaymentMethodText(rawPaymentMethod);
+    const rawCheckNo = getCustomFieldValueAny(detail, checkNumberFieldIds, "number");
+    const checkNo = (rawCheckNo !== undefined && rawCheckNo !== null) ? String(rawCheckNo) : "";
+
     results.push({
       source: sourceLabel,
       key: key,
@@ -397,8 +489,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       typeCode: typeCode,
       subCode: subCode,
       description: description,
-      paymentMethod: "",
-      checkNo: ""
+      paymentMethod: paymentMethod,
+      checkNo: checkNo
     });
   }
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
@@ -414,8 +506,8 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
     loadedTransactions = receiptResult.results.concat(paymentResult.results);
 
     if (loadedTransactions.length === 0) {
