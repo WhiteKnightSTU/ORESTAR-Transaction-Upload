@@ -70,6 +70,7 @@ function saveConfig() {
   const cfg = {
     baseUrl: document.getElementById("baseUrl").value.trim(),
     apiToken: document.getElementById("apiToken").value.trim(),
+    businessName: document.getElementById("businessName").value.trim(),
     cfFiler: document.getElementById("cfFiler").value.trim(),
     cfTypeSubtype: document.getElementById("cfTypeSubtype").value.trim(),
     cfDownloaded: document.getElementById("cfDownloaded").value.trim()
@@ -84,13 +85,18 @@ function saveConfig() {
   const cfg = loadStoredConfig();
   if (cfg.baseUrl) document.getElementById("baseUrl").value = cfg.baseUrl;
   if (cfg.apiToken) document.getElementById("apiToken").value = cfg.apiToken;
+  if (cfg.businessName) document.getElementById("businessName").value = cfg.businessName;
   if (cfg.cfFiler) document.getElementById("cfFiler").value = cfg.cfFiler;
   if (cfg.cfTypeSubtype) document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype;
   if (cfg.cfDownloaded) document.getElementById("cfDownloaded").value = cfg.cfDownloaded;
 })();
-["baseUrl", "apiToken", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+["baseUrl", "apiToken", "businessName", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
   document.getElementById(id).addEventListener("change", saveConfig);
 });
+
+function getBusinessName() {
+  return document.getElementById("businessName").value.trim();
+}
 
 function getBaseUrl() {
   return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
@@ -159,8 +165,14 @@ async function apiGet(path) {
 }
 
 async function apiGetV4(path) {
+  const businessName = getBusinessName();
+  if (!businessName) throw new Error("Business Name is required for /api4 calls — fill it in above (Connection section), matching your business's name in Manager exactly.");
   const res = await fetch(`${getBaseUrlV4()}${path}`, {
-    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
+    headers: {
+      "X-Api-Key": getApiToken(),
+      "Manager-Business": businessName,
+      "accept": "application/json"
+    }
   });
   if (!res.ok) throw new Error(`GET (v4) ${path} failed: HTTP ${res.status}`);
   return res.json();

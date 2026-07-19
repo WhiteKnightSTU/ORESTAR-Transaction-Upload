@@ -94,6 +94,12 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
       </label>
       <input type="password" id="apiToken" placeholder="paste your access token">
     </div>
+    <div>
+      <label for="businessName">Business Name
+        <span class="hint">Exactly as it appears in Manager — needed for /api4 calls (e.g. custom field definitions), which require it explicitly.</span>
+      </label>
+      <input type="text" id="businessName" placeholder="e.g. Acme Pty Ltd">
+    </div>
   </div>
   <button id="testConnBtn" type="button" class="secondary">Test Connection</button>
   <button id="forgetBtn" type="button" class="secondary">Forget Saved Credentials</button>
