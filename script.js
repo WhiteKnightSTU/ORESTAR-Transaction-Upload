@@ -101,7 +101,10 @@ let resolvedGuids = {
   employerName: null,
   employerCity: null,
   employerState: null,
-  contactType: null
+  contactType: null,
+  notEmployed: null,
+  selfEmployed: null,
+  peopleId: null
 };
 
 // /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
@@ -165,6 +168,9 @@ async function resolveFieldGuids() {
   const employerCityMatches = findByName(cfg.EMPLOYER_CITY_FIELD_NAME || "");
   const employerStateMatches = findByName(cfg.EMPLOYER_STATE_FIELD_NAME || "");
   const contactTypeMatches = findByName(cfg.CONTACT_TYPE_FIELD_NAME || "");
+  const notEmployedMatches = findByName(cfg.NOT_EMPLOYED_FIELD_NAME || "");
+  const selfEmployedMatches = findByName(cfg.SELF_EMPLOYED_FIELD_NAME || "");
+  const peopleIdMatches = findByName(cfg.PEOPLE_ID_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
   // ("Receipt"/"Payment") — no reliable way to tell which is which from the
@@ -183,7 +189,10 @@ async function resolveFieldGuids() {
     employerName: guidOf(employerNameMatches[0]),
     employerCity: guidOf(employerCityMatches[0]),
     employerState: guidOf(employerStateMatches[0]),
-    contactType: guidOf(contactTypeMatches[0])
+    contactType: guidOf(contactTypeMatches[0]),
+    notEmployed: guidOf(notEmployedMatches[0]),
+    selfEmployed: guidOf(selfEmployedMatches[0]),
+    peopleId: guidOf(peopleIdMatches[0])
   };
 
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
@@ -195,6 +204,9 @@ async function resolveFieldGuids() {
     (resolvedGuids.paymentMethodCandidates.length > 0 ? "✓" : "✗") + " Payment Method (\"" + (cfg.PAYMENT_METHOD_FIELD_NAME || "") + "\") — " + resolvedGuids.paymentMethodCandidates.length + " field(s) found",
     (resolvedGuids.checkNumberCandidates.length > 0 ? "✓" : "✗") + " Check # (\"" + (cfg.CHECK_NUMBER_FIELD_NAME || "") + "\") — " + resolvedGuids.checkNumberCandidates.length + " field(s) found",
     (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found"),
+    (resolvedGuids.notEmployed ? "✓" : "✗") + " Not Employed (\"" + (cfg.NOT_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.notEmployed ? "" : " — not found"),
+    (resolvedGuids.selfEmployed ? "✓" : "✗") + " Self-Employed (\"" + (cfg.SELF_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.selfEmployed ? "" : " — not found"),
+    (resolvedGuids.peopleId ? "✓" : "✗") + " People ID (\"" + (cfg.PEOPLE_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.peopleId ? "" : " — not found (optional)"),
     (resolvedGuids.occupation ? "✓" : "✗") + " Occupation (\"" + (cfg.OCCUPATION_FIELD_NAME || "") + "\")" + (resolvedGuids.occupation ? "" : " — not found"),
     (resolvedGuids.employerName ? "✓" : "✗") + " Employer Name (\"" + (cfg.EMPLOYER_NAME_FIELD_NAME || "") + "\")" + (resolvedGuids.employerName ? "" : " — not found"),
     (resolvedGuids.employerCity ? "✓" : "✗") + " Employer City (\"" + (cfg.EMPLOYER_CITY_FIELD_NAME || "") + "\")" + (resolvedGuids.employerCity ? "" : " — not found"),
@@ -459,6 +471,26 @@ function mapContactTypeText(raw) {
 // references it.
 let contactRecordCache = {};
 
+// UNCONFIRMED endpoint name — following the established "-form/{key}"
+// pattern. Looks up a Purchase Invoice's own Transaction ID field value —
+// if it was already filed in an earlier export, that's the real ORESTAR id
+// we need for associated-tran; if blank, it hasn't been filed yet.
+let invoiceTxnIdCache = {};
+async function resolveInvoiceTransactionId(key) {
+  if (invoiceTxnIdCache[key] !== undefined) return invoiceTxnIdCache[key];
+  try {
+    const rec = await managerApi("GET", "/api2/purchase-invoice-form/" + key);
+    const txnId = getCustomFieldValue(rec, resolvedGuids.transactionId, "number");
+    const result = (txnId !== undefined && txnId !== null && txnId !== "") ? String(txnId) : null;
+    invoiceTxnIdCache[key] = result;
+    return result;
+  } catch (e) {
+    console.warn("[ORESTAR] Could not resolve Purchase Invoice " + key + ":", e.message);
+    invoiceTxnIdCache[key] = null;
+    return null;
+  }
+}
+
 // customer/supplier/contact come back as bare key strings (confirmed from a
 // real export where the raw GUID ended up in the XML's business-name field)
 // pointing at a separate record, not inline reference objects with a name.
@@ -519,17 +551,36 @@ async function resolveContactRecord(key, hintedEndpoint) {
         console.log("[ORESTAR] No address field matched on " + endpoints[i] + " record — raw record for inspection:", rec);
       }
 
+      const occupation = getCustomFieldValue(rec, resolvedGuids.occupation, "text") || "";
+      const employerName = getCustomFieldValue(rec, resolvedGuids.employerName, "text") || "";
+      const employerCity = getCustomFieldValue(rec, resolvedGuids.employerCity, "text") || "";
+      const employerState = stateNameToAbbr(getCustomFieldValue(rec, resolvedGuids.employerState, "text"));
+
+      // Confirmed against the actual XSD: <employment> is an xs:choice of
+      // exactly one of <not-employed>Yes</not-employed>,
+      // <self-employed>Yes</self-employed>, or the normal employer-name/
+      // city/state sequence — a formal indicator, not free text. Occupation
+      // stays as whatever's actually on file (it's a separate element) and
+      // is no longer overwritten.
+      const isNotEmployed = getCustomFieldValue(rec, resolvedGuids.notEmployed, "checkbox") === true;
+      const isSelfEmployed = getCustomFieldValue(rec, resolvedGuids.selfEmployed, "checkbox") === true;
+      const employmentStatus = isNotEmployed ? "not-employed" : (isSelfEmployed ? "self-employed" : null);
+
       const result = {
         name: name,
         street1: addr.street1,
         city: addr.city,
         state: addr.state,
         zip: addr.zip,
-        occupation: getCustomFieldValue(rec, resolvedGuids.occupation, "text") || "",
-        employerName: getCustomFieldValue(rec, resolvedGuids.employerName, "text") || "",
-        employerCity: getCustomFieldValue(rec, resolvedGuids.employerCity, "text") || "",
-        employerState: stateNameToAbbr(getCustomFieldValue(rec, resolvedGuids.employerState, "text")),
-        type: mapContactTypeText(getCustomFieldValue(rec, resolvedGuids.contactType, "text"))
+        occupation: occupation,
+        employerName: employerName,
+        employerCity: employerCity,
+        employerState: employerState,
+        employmentStatus: employmentStatus,
+        type: mapContactTypeText(getCustomFieldValue(rec, resolvedGuids.contactType, "text")),
+        peopleId: getCustomFieldValue(rec, resolvedGuids.peopleId, "number") || "",
+        recordKey: key,
+        recordEndpoint: endpoints[i]
       };
       contactRecordCache[key] = result;
       return result;
@@ -568,7 +619,7 @@ async function resolveContactInfo(detail, item) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) return { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+    if (inlineName) return { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
     const resolved = await resolveContactRecord(key, hint);
     if (resolved) return resolved;
   }
@@ -581,7 +632,7 @@ async function resolveContactInfo(detail, item) {
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
     if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
-      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
     }
   }
 
@@ -590,7 +641,36 @@ async function resolveContactInfo(detail, item) {
   // multiple different blank transactions don't get merged into a single
   // contact entry (editing one would otherwise silently edit them all).
   const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
+}
+
+// UNTESTED against live data — no confirmed field names for how Manager
+// represents "this Payment pays off Purchase Invoice X." Checking the most
+// plausible candidates (top-level reference, or per-line reference within
+// Lines) but this genuinely needs verification against a real payment that
+// pays an invoice, the same way every other field name in this file got
+// nailed down through live testing.
+function extractInvoiceLinks(detail, item) {
+  const keys = [];
+  function addKey(v) {
+    if (!v) return;
+    if (typeof v === "string") { keys.push(v); return; }
+    if (typeof v === "object" && (v.key || v.Key)) { keys.push(v.key || v.Key); return; }
+    if (Array.isArray(v)) { v.forEach(addKey); return; }
+  }
+  addKey(detail && detail.PurchaseInvoice);
+  addKey(detail && detail.purchaseInvoice);
+  addKey(detail && detail.Invoice);
+  addKey(detail && detail.Invoices);
+  addKey(detail && detail.invoices);
+  const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
+  if (Array.isArray(lines)) {
+    lines.forEach(function(l) {
+      addKey(l.PurchaseInvoice || l.purchaseInvoice || l.Invoice || l.invoice);
+    });
+  }
+  // De-duplicate
+  return keys.filter(function(k, i, arr) { return arr.indexOf(k) === i; });
 }
 
 function extractAccountRef(item, detail) {
@@ -609,7 +689,7 @@ function extractAccountRef(item, detail) {
 
 const FETCH_PAGE_SIZE = 5000;
 
-async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, selectedKeys) {
+async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
   const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
   const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
@@ -647,22 +727,44 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       loggedSample[sourceLabel] = true;
     }
 
-    let typeText = "", subtypeText = "";
-    const cfValue = getCustomFieldValueAny(detail, typeSubtypeFieldIds, "text");
-    if (cfValue) {
-      const parts = String(cfValue).split(" - ");
-      typeText = parts[0].trim();
-      subtypeText = parts.length > 1 ? parts.slice(1).join(" - ").trim() : "";
+    let typeCode, subCode;
+    if (forcedType) {
+      typeCode = forcedType;
+      subCode = forcedSubCode || "";
+    } else {
+      let typeText = "", subtypeText = "";
+      const cfValue = getCustomFieldValueAny(detail, typeSubtypeFieldIds, "text");
+      if (cfValue) {
+        const parts = String(cfValue).split(" - ");
+        typeText = parts[0].trim();
+        subtypeText = parts.length > 1 ? parts.slice(1).join(" - ").trim() : "";
+      }
+      typeCode = TYPE_CODE[typeText] || "";
+      subCode = subtypeText ? (SUBTYPE_TEXT_TO_CODE[subtypeText] || "") : "";
+      if (!subCode && typeCode) subCode = DEFAULT_SUBTYPE[typeCode] || "";
     }
-
-    const typeCode = TYPE_CODE[typeText] || "";
-    let subCode = subtypeText ? (SUBTYPE_TEXT_TO_CODE[subtypeText] || "") : "";
-    if (!subCode && typeCode) subCode = DEFAULT_SUBTYPE[typeCode] || "";
 
     const rawPaymentMethod = getCustomFieldValueAny(detail, paymentMethodFieldIds, "text");
     const paymentMethod = mapPaymentMethodText(rawPaymentMethod);
     const rawCheckNo = getCustomFieldValueAny(detail, checkNumberFieldIds, "number");
     const checkNo = (rawCheckNo !== undefined && rawCheckNo !== null) ? String(rawCheckNo) : "";
+
+    // If this Payment pays off one or more Purchase Invoices (filed
+    // separately as Accounts Payable), it must be filed as a plain Cash
+    // Expenditure regardless of any custom field, and linked back to the
+    // originating AP transaction(s) via associated-tran.
+    let apInvoiceRefs = [];
+    if (sourceLabel !== "Purchase Invoice (AP)") {
+      const invoiceKeys = extractInvoiceLinks(detail, item);
+      if (invoiceKeys.length > 0) {
+        typeCode = "E";
+        subCode = "CE";
+        for (let vi = 0; vi < invoiceKeys.length; vi++) {
+          const existingTxnId = await resolveInvoiceTransactionId(invoiceKeys[vi]);
+          apInvoiceRefs.push({ key: invoiceKeys[vi], existingTxnId: existingTxnId });
+        }
+      }
+    }
 
     results.push({
       source: sourceLabel,
@@ -678,7 +780,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       subCode: subCode,
       description: description,
       paymentMethod: paymentMethod,
-      checkNo: checkNo
+      checkNo: checkNo,
+      apInvoiceRefs: apInvoiceRefs
     });
   }
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
@@ -690,13 +793,31 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
     return;
   }
 
-  showStatus("pending", "Loading not-yet-exported receipts and payments…");
+  showStatus("pending", "Loading not-yet-exported receipts, payments, expense claims, and purchase invoices…");
   try {
     const selectedKeys = selectedAccountKeys();
 
     const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
     const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys);
-    loadedTransactions = receiptResult.results.concat(paymentResult.results);
+
+    // Both endpoints below are UNCONFIRMED — inferred from the same naming
+    // pattern that's worked for every other resource (receipts/payments).
+    // Tolerating failure here rather than blocking the whole load, since
+    // Receipts/Payments are the proven-working core of this tool.
+    let expenseClaimResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
+    let purchaseInvoiceResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
+    try {
+      expenseClaimResults = await loadCollection("/expense-claims", "/expense-claim-form", "Expense Claim", null, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, selectedKeys, "E", "PE");
+    } catch (e) {
+      console.warn("[ORESTAR] Expense Claims fetch failed (endpoint may not match your version):", e.message);
+    }
+    try {
+      purchaseInvoiceResults = await loadCollection("/purchase-invoices", "/purchase-invoice-form", "Purchase Invoice (AP)", null, resolvedGuids.transactionId, [], [], selectedKeys, "E", "AP");
+    } catch (e) {
+      console.warn("[ORESTAR] Purchase Invoices fetch failed (endpoint may not match your version):", e.message);
+    }
+
+    loadedTransactions = receiptResult.results.concat(paymentResult.results, expenseClaimResults.results, purchaseInvoiceResults.results);
 
     if (loadedTransactions.length === 0) {
       showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check the resolved-fields status above, and that the account picker matches what you expect.");
@@ -706,12 +827,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 
     renderReview();
 
-    if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated) {
+    if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated || expenseClaimResults.possiblyTruncated || purchaseInvoiceResults.possiblyTruncated) {
       showStatus("err",
-        "Loaded " + loadedTransactions.length + " transaction(s), but this business has " + receiptResult.totalFetched + " receipt(s) and/or " + paymentResult.totalFetched + " payment(s) total — right at the fetch limit (" + FETCH_PAGE_SIZE + "). " +
+        "Loaded " + loadedTransactions.length + " transaction(s), but one or more sources are right at the fetch limit (" + FETCH_PAGE_SIZE + "). " +
         "Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing.");
     } else {
-      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) out of " + receiptResult.totalFetched + " receipt(s) and " + paymentResult.totalFetched + " payment(s) checked in total. Review below before generating XML.");
+      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) — " + receiptResult.totalFetched + " receipt(s), " + paymentResult.totalFetched + " payment(s), " + expenseClaimResults.totalFetched + " expense claim(s), " + purchaseInvoiceResults.totalFetched + " purchase invoice(s) checked in total. Review below before generating XML.");
     }
   } catch (err) {
     showStatus("err", "Failed to load: " + err.message);
@@ -796,7 +917,8 @@ function guessContact(name) {
     business: looksLikePerson ? "" : name,
     committeeName: "",
     street1: "", city: "", state: "", zip: "", county: "",
-    occupation: "", employerName: "", employerCity: "", employerState: ""
+    occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null,
+    peopleId: "", recordKey: null, recordEndpoint: null
   };
 }
 
@@ -825,10 +947,13 @@ function buildContactFromInfo(name, info) {
   if (info.employerName) base.employerName = info.employerName;
   if (info.employerCity) base.employerCity = info.employerCity;
   if (info.employerState) base.employerState = info.employerState;
+  if (info.employmentStatus) base.employmentStatus = info.employmentStatus;
   if (info.street1) base.street1 = info.street1;
   if (info.city) base.city = info.city;
   if (info.state) base.state = info.state;
   if (info.zip) base.zip = info.zip;
+  if (info.peopleId) base.peopleId = info.peopleId;
+  if (info.recordKey) { base.recordKey = info.recordKey; base.recordEndpoint = info.recordEndpoint; }
   return base;
 }
 
@@ -868,9 +993,19 @@ function renderContacts() {
       "</div>" +
       '<div class="row" style="display:' + (c.type === "I" || c.type === "F" ? "flex" : "none") + '">' +
         '<div><label>Occupation</label><input data-name="' + escapeXml(name) + '" data-field="occupation" value="' + escapeXml(c.occupation) + '"></div>' +
+        "<div><label>Employment Status</label><select data-name=\"" + escapeXml(name) + "\" data-field=\"employmentStatus\">" +
+          '<option value="" ' + (!c.employmentStatus ? "selected" : "") + '>Has an employer</option>' +
+          '<option value="not-employed" ' + (c.employmentStatus === "not-employed" ? "selected" : "") + '>Not Employed</option>' +
+          '<option value="self-employed" ' + (c.employmentStatus === "self-employed" ? "selected" : "") + '>Self-Employed</option>' +
+        "</select></div>" +
+      "</div>" +
+      '<div class="row" style="display:' + (c.employmentStatus ? "none" : "flex") + '" data-employer-row="' + escapeXml(name) + '">' +
         '<div><label>Employer</label><input data-name="' + escapeXml(name) + '" data-field="employerName" value="' + escapeXml(c.employerName) + '"></div>' +
         '<div><label>Employer City</label><input data-name="' + escapeXml(name) + '" data-field="employerCity" value="' + escapeXml(c.employerCity) + '"></div>' +
         '<div><label>Employer State</label><input data-name="' + escapeXml(name) + '" data-field="employerState" maxlength="2" value="' + escapeXml(c.employerState) + '"></div>' +
+      "</div>" +
+      '<div class="row">' +
+        '<div><label>ORESTAR People ID <span class="hint">Your own record only — ORESTAR auto-matches contacts by name/type on its own, so this isn\'t needed to avoid duplicates, just handy for your own tracking.</span></label><input data-name="' + escapeXml(name) + '" data-field="peopleId" value="' + escapeXml(c.peopleId) + '"></div>' +
       "</div>";
     container.appendChild(card);
   });
@@ -880,10 +1015,51 @@ function renderContacts() {
       const name = e.target.dataset.name;
       const field = e.target.dataset.field;
       contactsByName[name][field] = e.target.value;
-      if (field === "type") renderContacts();
+      if (field === "type" || field === "employmentStatus") renderContacts();
     });
   });
 }
+
+document.getElementById("savePeopleIdsBtn").addEventListener("click", async function() {
+  const el = document.getElementById("peopleIdStatus");
+  if (!resolvedGuids.peopleId) {
+    el.textContent = "The \"ORESTAR People ID\" custom field wasn't found — create it in Manager (Number-type, on Customer/Supplier/Employee) and click \"Load Accounts & Resolve Fields\" again first.";
+    return;
+  }
+  const entries = Object.keys(contactsByName)
+    .map(function(name) { return contactsByName[name]; })
+    .filter(function(c) { return c.peopleId && c.recordKey && c.recordEndpoint; });
+
+  if (entries.length === 0) {
+    el.textContent = "Nothing to save — fill in a People ID for a contact that resolved to an actual Customer/Supplier/Employee record first (manually-typed contact names with no linked record can't be saved back).";
+    return;
+  }
+
+  el.textContent = "Saving " + entries.length + " People ID(s)…";
+  let succeeded = 0;
+  const failures = [];
+  for (let i = 0; i < entries.length; i++) {
+    const c = entries[i];
+    if (!/^\d+$/.test(String(c.peopleId).trim())) {
+      failures.push(c.recordKey + ": People ID must be a plain number (this field is Number-type in Manager)");
+      continue;
+    }
+    try {
+      const body = { CustomFields2: { Decimals: {} } };
+      body.CustomFields2.Decimals[resolvedGuids.peopleId] = Number(c.peopleId);
+      await managerApi("PUT", "/api2/" + c.recordEndpoint + "/" + c.recordKey, body);
+      succeeded++;
+    } catch (e) {
+      failures.push(c.recordKey + ": " + e.message);
+    }
+  }
+
+  if (failures.length === 0) {
+    el.textContent = "Saved " + succeeded + " People ID(s) to Manager. They'll auto-fill next time you load these contacts.";
+  } else {
+    el.textContent = "Saved " + succeeded + " of " + entries.length + ". Failures:\n" + failures.join("\n");
+  }
+});
 
 function buildContactXml(id, c) {
   let nameXml;
@@ -907,7 +1083,11 @@ function buildContactXml(id, c) {
   }
 
   let employmentXml = "";
-  if (c.employerName) {
+  if (c.employmentStatus === "not-employed") {
+    employmentXml = "<employment><not-employed>Yes</not-employed></employment>";
+  } else if (c.employmentStatus === "self-employed") {
+    employmentXml = "<employment><self-employed>Yes</self-employed></employment>";
+  } else if (c.employerName) {
     employmentXml = "<employment><employer-name>" + escapeXml(c.employerName) + "</employer-name>" +
       (c.employerCity ? "<city>" + escapeXml(c.employerCity) + "</city>" : "") +
       (c.employerState ? "<state>" + escapeXml(c.employerState) + "</state>" : "") +
@@ -923,7 +1103,12 @@ function buildContactXml(id, c) {
     "</contact>";
 }
 
-function buildTransactionXml(id, contactId, t) {
+function buildTransactionXml(id, contactId, t, associatedTrans) {
+  const assocXml = (associatedTrans && associatedTrans.length > 0)
+    ? associatedTrans.map(function(a) {
+        return "<associated-tran><id>" + escapeXml(a.id) + "</id><complete>" + (a.complete ? "Y" : "N") + "</complete></associated-tran>";
+      }).join("")
+    : "";
   return "<transaction id=\"" + escapeXml(id) + "\">" +
     "<operation><add>true</add></operation>" +
     "<contact-id>" + escapeXml(contactId) + "</contact-id>" +
@@ -934,6 +1119,7 @@ function buildTransactionXml(id, contactId, t) {
     (t.paymentMethod ? "<payment-method>" + t.paymentMethod + "</payment-method>" : "") +
     "<date>" + t.date + "</date>" +
     (t.checkNo ? "<check-no>" + escapeXml(t.checkNo) + "</check-no>" : "") +
+    assocXml +
     "</transaction>";
 }
 
@@ -966,9 +1152,36 @@ document.getElementById("generateBtn").addEventListener("click", function() {
     contactXmlParts.push(buildContactXml(id, c));
   });
 
-  const tranXmlParts = loadedTransactions.map(function(t, i) {
-    return buildTransactionXml("T" + stamp + "-" + (i + 1), contactIdByName[t.contactName], t);
+  // Assign this batch's transaction IDs first, and build a lookup from each
+  // Purchase Invoice's own Manager record key to its freshly-assigned file
+  // ID — needed below for AP payoffs whose invoice is being filed in this
+  // same batch (no existing ORESTAR-assigned Transaction ID yet).
+  const localTranIds = loadedTransactions.map(function(t, i) { return "T" + stamp + "-" + (i + 1); });
+  const invoiceKeyToLocalTranId = {};
+  loadedTransactions.forEach(function(t, i) {
+    if (t.source === "Purchase Invoice (AP)") invoiceKeyToLocalTranId[t.key] = localTranIds[i];
   });
+
+  const unlinkedApWarnings = [];
+  const tranXmlParts = loadedTransactions.map(function(t, i) {
+    let associatedTrans = [];
+    if (t.apInvoiceRefs && t.apInvoiceRefs.length > 0) {
+      t.apInvoiceRefs.forEach(function(ref) {
+        const linkedId = ref.existingTxnId || invoiceKeyToLocalTranId[ref.key];
+        if (linkedId) {
+          associatedTrans.push({ id: linkedId, complete: true });
+        } else {
+          unlinkedApWarnings.push(t.contactName + " (" + t.date + ", $" + t.amount + ") pays off an invoice that hasn't been filed yet and isn't in this batch — export/file that Purchase Invoice first.");
+        }
+      });
+    }
+    return buildTransactionXml(localTranIds[i], contactIdByName[t.contactName], t, associatedTrans);
+  });
+
+  const apWarningText = unlinkedApWarnings.length > 0
+    ? "\n\n⚠ " + unlinkedApWarnings.length + " AP payoff(s) couldn't be linked (filed as plain Cash Expenditures, no associated-tran):\n" +
+      unlinkedApWarnings.slice(0, 5).join("\n") + (unlinkedApWarnings.length > 5 ? "\n…and " + (unlinkedApWarnings.length - 5) + " more" : "")
+    : "";
 
   const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<campaign-finance-transactions xmlns="http://www.state.or.us/sos/ebs2/ce/dataobject" ' +
@@ -994,7 +1207,8 @@ document.getElementById("generateBtn").addEventListener("click", function() {
   };
   renderTxnIdTable();
   document.getElementById("txnIdSection").style.display = "block";
-  showStatus("ok", "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save.");
+  showStatus(apWarningText ? "err" : "ok",
+    "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save." + apWarningText);
 });
 
 function renderTxnIdTable() {

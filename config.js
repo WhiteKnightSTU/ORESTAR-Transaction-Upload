@@ -32,5 +32,17 @@ const ORESTAR_CONFIG = {
   EMPLOYER_NAME_FIELD_NAME: "Occupational Information: Employer's Name",
   EMPLOYER_CITY_FIELD_NAME: "Occupational Information: Employer's City",
   EMPLOYER_STATE_FIELD_NAME: "Occupational Information: Employer's State", // stores full state name, e.g. "Oregon"
-  CONTACT_TYPE_FIELD_NAME: "Type" // stores the entity type (Individual/Business/etc.)
+  CONTACT_TYPE_FIELD_NAME: "Type", // stores the entity type (Individual/Business/etc.)
+
+  // Checkbox-type fields, same placement as the fields above.
+  NOT_EMPLOYED_FIELD_NAME: "Not Employed",
+  SELF_EMPLOYED_FIELD_NAME: "Self-Employed",
+
+  // Optional — for your own record-keeping only. ORESTAR's XML format has
+  // no way to reference an existing person from a prior filing (confirmed
+  // against the actual XSD), so this does NOT prevent ORESTAR from creating
+  // a new person record on each upload. It just gives you a place to note
+  // down whatever ID ORESTAR shows you, the same way Transaction ID works.
+  // Leave blank if you haven't created this custom field.
+  PEOPLE_ID_FIELD_NAME: "ORESTAR People ID"
 };
