@@ -290,8 +290,10 @@ async function fetchFilerId(filerFieldId) {
 // Confirmed via live testing: this resource lives under /api4, not /api2 —
 // singular "account", unlike most /api2 list endpoints (receipts, payments)
 // which are plural.
+// Confirmed via live discovery sweep: this resource is /bank-and-cash-accounts
+// ("and", not "or") on the regular /api2 base — no /api4 needed after all.
 async function fetchAccounts() {
-  const data = await apiGetV4(`/bank-or-cash-account?pageSize=1000`);
+  const data = await apiGet(`/bank-and-cash-accounts?pageSize=1000`);
   const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
   const items = arrayKey ? data[arrayKey] : [];
   return items.map(a => {
