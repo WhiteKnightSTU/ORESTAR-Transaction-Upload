@@ -96,11 +96,12 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
     </div>
     <div>
       <label for="businessName">Business Name
-        <span class="hint">Exactly as it appears in Manager — needed for /api4 calls (e.g. custom field definitions), which require it explicitly.</span>
+        <span class="hint">Auto-detected from Manager — click Detect Business, or it fills in after Test Connection.</span>
       </label>
-      <input type="text" id="businessName" placeholder="e.g. Acme Pty Ltd">
+      <input type="text" id="businessName" placeholder="(auto-detected)">
     </div>
   </div>
+  <button id="detectBusinessBtn" type="button" class="secondary">Detect Business</button>
   <button id="testConnBtn" type="button" class="secondary">Test Connection</button>
   <button id="forgetBtn" type="button" class="secondary">Forget Saved Credentials</button>
 </fieldset>

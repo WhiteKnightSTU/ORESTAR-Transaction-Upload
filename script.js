@@ -166,16 +166,36 @@ async function apiGet(path) {
 
 async function apiGetV4(path) {
   const businessName = getBusinessName();
-  if (!businessName) throw new Error("Business Name is required for /api4 calls — fill it in above (Connection section), matching your business's name in Manager exactly.");
-  const res = await fetch(`${getBaseUrlV4()}${path}`, {
-    headers: {
-      "X-Api-Key": getApiToken(),
-      "Manager-Business": businessName,
-      "accept": "application/json"
-    }
+  if (!businessName) throw new Error("Business Name isn't set yet — click \"Detect Business\" above, or it should auto-fill after Test Connection.");
+  const separator = path.includes("?") ? "&" : "?";
+  const url = `${getBaseUrlV4()}${path}${separator}business=${encodeURIComponent(businessName)}`;
+  const res = await fetch(url, {
+    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
   });
   if (!res.ok) throw new Error(`GET (v4) ${path} failed: HTTP ${res.status}`);
   return res.json();
+}
+
+// Auto-detect the business name instead of asking it to be typed (spaces in
+// the name caused issues as a raw header value — encodeURIComponent as a
+// query param, per the server's own error message, handles that cleanly).
+// /api4/businesses lists what this token can access; if there's exactly one,
+// we use it directly rather than requiring manual entry at all.
+async function detectBusinessName() {
+  const res = await fetch(`${getBaseUrlV4()}/businesses`, {
+    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
+  });
+  if (!res.ok) throw new Error(`GET /businesses failed: HTTP ${res.status}`);
+  const data = await res.json();
+  const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+  const businesses = arrayKey ? data[arrayKey] : (Array.isArray(data) ? data : []);
+  if (businesses.length === 0) throw new Error("No businesses returned from /api4/businesses.");
+  if (businesses.length === 1) {
+    return businesses[0].Name || businesses[0].name;
+  }
+  // Multiple businesses on this server/token — can't guess, list them for manual pick.
+  const names = businesses.map(b => b.Name || b.name).join(", ");
+  throw new Error(`Multiple businesses found (${names}) — set Business Name manually to the one you want.`);
 }
 
 // UNCONFIRMED: Manager's update verb for api2 isn't documented anywhere I could
@@ -219,6 +239,25 @@ document.getElementById("forgetBtn").addEventListener("click", () => {
   el.textContent = "Saved credentials and config cleared from this browser.";
 });
 
+document.getElementById("detectBusinessBtn").addEventListener("click", async () => {
+  const el = document.getElementById("connStatus");
+  el.style.display = "block";
+  el.className = "banner";
+  if (!getBaseUrl() || !getApiToken()) {
+    el.textContent = "Fill in Base URL and Access Token first.";
+    return;
+  }
+  el.textContent = "Detecting business…";
+  try {
+    const name = await detectBusinessName();
+    document.getElementById("businessName").value = name;
+    saveConfig();
+    el.textContent = `Business detected: ${name}`;
+  } catch (e) {
+    el.textContent = `Could not auto-detect: ${e.message}`;
+  }
+});
+
 document.getElementById("testConnBtn").addEventListener("click", async () => {
   const el = document.getElementById("connStatus");
   el.style.display = "block";
@@ -236,6 +275,18 @@ document.getElementById("testConnBtn").addEventListener("click", async () => {
     await apiGet(`/receipts?pageSize=1`);
     saveConfig();
     el.textContent = "Connected successfully.";
+    // Auto-detect business name too, since /api4 calls need it and typing
+    // it by hand ran into encoding issues with spaces.
+    if (!getBusinessName()) {
+      try {
+        const name = await detectBusinessName();
+        document.getElementById("businessName").value = name;
+        saveConfig();
+        el.textContent = `Connected successfully. Business detected: ${name}`;
+      } catch (e) {
+        el.textContent = `Connected successfully. Could not auto-detect business name: ${e.message} (you can set it manually, or click Detect Business separately).`;
+      }
+    }
   } catch (e) {
     el.textContent = `Connection failed: ${e.message}. Double-check the Base URL (should end in /api2, no trailing slash issues) and that the Access Token is still valid in Settings → Access Tokens.`;
   }
