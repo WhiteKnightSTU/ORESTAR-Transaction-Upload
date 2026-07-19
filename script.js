@@ -740,6 +740,11 @@ document.getElementById("generateBtn").addEventListener("click", function() {
     showStatus("err", "Every transaction needs a Type and Sub-type — check the table above.");
     return;
   }
+  const unfilledContacts = loadedTransactions.filter(function(t) { return /^\(no contact - /.test(t.contactName); });
+  if (unfilledContacts.length > 0) {
+    showStatus("err", unfilledContacts.length + " transaction(s) still have a placeholder Contact Name (starts with \"(no contact - \") instead of a real name — fix those in the Contact Name column above before generating. These weren't linked to a Customer/Supplier/Contact record in Manager, so they need a name entered manually.");
+    return;
+  }
   lastGeneratedFilerId = filerId;
 
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
