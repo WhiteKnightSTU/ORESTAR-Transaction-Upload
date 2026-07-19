@@ -138,6 +138,14 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
   <div class="account-list" id="accountList"><span class="small">Click "Load Accounts" below.</span></div>
   <button id="loadAccountsBtn" type="button" class="secondary">Load Accounts</button>
   <button id="discoverBtn" type="button" class="secondary">Discover Account Endpoint</button>
+  <div class="row">
+    <div>
+      <label for="bizGuid">Business record GUID (optional)
+        <span class="hint">If Business Details needs a trailing key (like receipt-form/{key} does) — find it in Manager's own address bar on the Business Details page.</span>
+      </label>
+      <input type="text" id="bizGuid" placeholder="e.g. 1a2b3c4d-5e6f-...">
+    </div>
+  </div>
   <button id="testBizFormBtn" type="button" class="secondary">Test business-details-form (experimental)</button>
 
   <div style="margin-top:14px;">

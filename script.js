@@ -271,23 +271,26 @@ function getCustomFieldValue(detail, fieldId, kind) {
 // than dismissing or re-building the whole auto-fetch mechanism around it.
 async function testBusinessDetailsForm() {
   const results = [];
+  const guid = document.getElementById("bizGuid").value.trim();
+  const path = guid ? `/business-details-form/${guid}` : "/business-details-form";
+
   try {
-    const data = await apiGet("/business-details-form");
-    results.push(`api2 /business-details-form — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
-    console.log("[ORESTAR] api2 /business-details-form raw response:", data);
+    const data = await apiGet(path);
+    results.push(`api2 ${path} — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
+    console.log(`[ORESTAR] api2 ${path} raw response:`, data);
   } catch (e) {
-    results.push(`api2 /business-details-form — ${e.message}`);
+    results.push(`api2 ${path} — ${e.message}`);
   }
   if (getBusinessName()) {
     try {
-      const data = await apiGetV4("/business-details-form");
-      results.push(`api4 /business-details-form — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
-      console.log("[ORESTAR] api4 /business-details-form raw response:", data);
+      const data = await apiGetV4(path);
+      results.push(`api4 ${path} — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
+      console.log(`[ORESTAR] api4 ${path} raw response:`, data);
     } catch (e) {
-      results.push(`api4 /business-details-form — ${e.message}`);
+      results.push(`api4 ${path} — ${e.message}`);
     }
   } else {
-    results.push("api4 /business-details-form — skipped (set Business Name first)");
+    results.push(`api4 ${path} — skipped (set Business Name first)`);
   }
   return results;
 }
