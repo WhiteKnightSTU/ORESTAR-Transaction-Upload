@@ -94,9 +94,10 @@ function saveConfig() {
 }
 (function restoreConfig() {
   const cfg = loadStoredConfig();
-  if (cfg.cfFiler) document.getElementById("cfFiler").value = cfg.cfFiler;
-  if (cfg.cfTypeSubtype) document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype;
-  if (cfg.cfDownloaded) document.getElementById("cfDownloaded").value = cfg.cfDownloaded;
+  const fileConfig = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
+  document.getElementById("cfFiler").value = cfg.cfFiler || fileConfig.FILER_ID_FIELD_GUID || "";
+  document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype || fileConfig.TYPE_SUBTYPE_FIELD_GUID || "";
+  document.getElementById("cfDownloaded").value = cfg.cfDownloaded || fileConfig.DOWNLOADED_FIELD_GUID || "";
 })();
 ["cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(function(id) {
   document.getElementById(id).addEventListener("change", saveConfig);
