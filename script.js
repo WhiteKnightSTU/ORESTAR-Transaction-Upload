@@ -474,17 +474,24 @@ let contactRecordCache = {};
 function parseAddressBlock(raw) {
   if (!raw) return { street1: "", city: "", state: "", zip: "" };
   const lines = String(raw).split(/\r?\n/).map(function(l) { return l.trim(); }).filter(Boolean);
-  const street1 = lines[0] || "";
+  if (lines.length === 0) return { street1: "", city: "", state: "", zip: "" };
+  if (lines.length === 1) {
+    // Only one line at all — no separate City/State/Zip line to parse out.
+    return { street1: lines[0], city: "", state: "", zip: "" };
+  }
+  // Last line is always City/State/Zip; everything before it is the street
+  // address, however many lines that spans (e.g. a second "Suite ..." line)
+  // — joined with spaces rather than assuming exactly one street line.
+  const lastLine = lines[lines.length - 1];
+  const street1 = lines.slice(0, lines.length - 1).join(" ");
   let city = "", state = "", zip = "";
-  if (lines[1]) {
-    const m = lines[1].match(/^(.*),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
-    if (m) {
-      city = m[1].trim();
-      state = m[2].toUpperCase();
-      zip = m[3];
-    } else {
-      city = lines[1]; // doesn't match the expected pattern — dump it in city rather than lose it
-    }
+  const m = lastLine.match(/^(.*),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
+  if (m) {
+    city = m[1].trim();
+    state = m[2].toUpperCase();
+    zip = m[3];
+  } else {
+    city = lastLine; // doesn't match the expected pattern — dump it in city rather than lose it
   }
   return { street1: street1, city: city, state: state, zip: zip };
 }
@@ -502,7 +509,15 @@ async function resolveContactRecord(key, hintedEndpoint) {
       const name = rec.Name || rec.name;
       if (!name) continue;
 
-      const addr = parseAddressBlock(rec.Address || rec.address);
+      // Confirmed: Customer records use BillingAddress/DeliveryAddress — using
+      // billing only, as requested, not delivery. Address/address kept as a
+      // fallback for Supplier/Employee records, which seem to use a single
+      // general field instead of split billing/delivery.
+      const rawAddress = rec.BillingAddress || rec.billingAddress || rec.Address || rec.address;
+      const addr = parseAddressBlock(rawAddress);
+      if (!rawAddress) {
+        console.log("[ORESTAR] No address field matched on " + endpoints[i] + " record — raw record for inspection:", rec);
+      }
 
       const result = {
         name: name,
