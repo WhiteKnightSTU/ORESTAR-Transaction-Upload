@@ -77,8 +77,7 @@ async function managerApi(method, path, body) {
 // definitions. No GUIDs stored anywhere; nothing to keep in sync manually.
 let resolvedGuids = {
   filer: null,
-  typeSubtypeReceipt: null,
-  typeSubtypePayment: null,
+  typeSubtypeCandidates: [],
   transactionId: null
 };
 
@@ -124,10 +123,6 @@ async function resolveFieldGuids() {
   const cfg = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
   const fields = await fetchAllCustomFieldDefinitions();
 
-  function placementText(f) {
-    const p = f.Placement || f.placement || f.Placements || f.placements || "";
-    return Array.isArray(p) ? p.join(",").toLowerCase() : String(p).toLowerCase();
-  }
   function findByName(name) {
     return fields.filter(function(f) {
       return (f.Name || f.name || f.Label || f.label || "").trim() === name.trim();
@@ -141,13 +136,16 @@ async function resolveFieldGuids() {
   const typeSubtypeMatches = findByName(cfg.TYPE_SUBTYPE_FIELD_NAME || "");
   const transactionIdMatches = findByName(cfg.TRANSACTION_ID_FIELD_NAME || "");
 
-  const typeSubtypeReceipt = typeSubtypeMatches.find(function(f) { return placementText(f).indexOf("eceipt") !== -1; });
-  const typeSubtypePayment = typeSubtypeMatches.find(function(f) { return placementText(f).indexOf("ayment") !== -1; });
-
+  // Placement turned out to be opaque form-type GUIDs, not readable text
+  // ("Receipt"/"Payment") — no reliable way to tell which is which from the
+  // field definition alone. Instead of guessing, keep every GUID that
+  // matches the name; when reading a specific transaction's value later,
+  // we just check each candidate and use whichever one actually has data —
+  // Manager only returns a value for the field that actually applies to
+  // that record type, so this sorts itself out naturally per-record.
   resolvedGuids = {
     filer: guidOf(filerMatches[0]),
-    typeSubtypeReceipt: guidOf(typeSubtypeReceipt),
-    typeSubtypePayment: guidOf(typeSubtypePayment),
+    typeSubtypeCandidates: typeSubtypeMatches.map(guidOf).filter(Boolean),
     transactionId: guidOf(transactionIdMatches[0])
   };
 
@@ -156,8 +154,7 @@ async function resolveFieldGuids() {
   const statusEl = document.getElementById("resolvedFieldsStatus");
   const lines = [
     (resolvedGuids.filer ? "✓" : "✗") + " Filer ID (\"" + (cfg.FILER_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.filer ? "" : " — not found"),
-    (resolvedGuids.typeSubtypeReceipt ? "✓" : "✗") + " Transaction Type / Receipts (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypeReceipt ? "" : " — not found on a field placed on Receipts"),
-    (resolvedGuids.typeSubtypePayment ? "✓" : "✗") + " Transaction Type / Payments (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypePayment ? "" : " — not found on a field placed on Payments"),
+    (resolvedGuids.typeSubtypeCandidates.length > 0 ? "✓" : "✗") + " Transaction Type (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\") — " + resolvedGuids.typeSubtypeCandidates.length + " field(s) found" + (resolvedGuids.typeSubtypeCandidates.length < 2 ? " (expected 2 — one for Receipts, one for Payments)" : ""),
     (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found")
   ];
   statusEl.innerHTML = lines.join("<br>");
@@ -223,6 +220,19 @@ function getCustomFieldValue(detail, fieldId, kind) {
     return pick("decimals", "Decimals", "numbers", "Numbers", "strings", "Strings");
   }
   return pick("strings", "Strings");
+}
+
+// Tries each candidate field GUID in turn and returns the first one that
+// actually has a value on this record. Used for "Transaction Type," which
+// is really two separate field objects (one per form) sharing the same
+// name — a given record's CustomFields2 will only ever contain a value for
+// whichever one actually applies to it, so this sorts itself out naturally.
+function getCustomFieldValueAny(detail, fieldIds, kind) {
+  for (let i = 0; i < fieldIds.length; i++) {
+    const v = getCustomFieldValue(detail, fieldIds[i], kind);
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return undefined;
 }
 
 async function fetchFilerId(filerFieldId) {
@@ -332,7 +342,7 @@ function extractAccountRef(item, detail) {
 
 const FETCH_PAGE_SIZE = 5000;
 
-async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldId, downloadedFieldId, selectedKeys) {
+async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, selectedKeys) {
   const results = [];
   const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
   const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
@@ -364,7 +374,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const description = detail.Description || item.Description || "";
 
     let typeText = "", subtypeText = "";
-    const cfValue = getCustomFieldValue(detail, typeSubtypeFieldId, "text");
+    const cfValue = getCustomFieldValueAny(detail, typeSubtypeFieldIds, "text");
     if (cfValue) {
       const parts = String(cfValue).split(" - ");
       typeText = parts[0].trim();
@@ -395,7 +405,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 }
 
 document.getElementById("loadBtn").addEventListener("click", async function() {
-  if (!resolvedGuids.typeSubtypeReceipt || !resolvedGuids.typeSubtypePayment || !resolvedGuids.transactionId) {
+  if (resolvedGuids.typeSubtypeCandidates.length === 0 || !resolvedGuids.transactionId) {
     showStatus("err", "Fields aren't fully resolved yet — click \"Load Accounts & Resolve Fields\" above first, and check the resolved-fields status for anything missing.");
     return;
   }
@@ -404,8 +414,8 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeReceipt, resolvedGuids.transactionId, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypePayment, resolvedGuids.transactionId, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, selectedKeys);
     loadedTransactions = receiptResult.results.concat(paymentResult.results);
 
     if (loadedTransactions.length === 0) {
