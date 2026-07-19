@@ -96,7 +96,12 @@ let resolvedGuids = {
   typeSubtypeCandidates: [],
   transactionId: null,
   paymentMethodCandidates: [],
-  checkNumberCandidates: []
+  checkNumberCandidates: [],
+  occupation: null,
+  employerName: null,
+  employerCity: null,
+  employerState: null,
+  contactType: null
 };
 
 // /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
@@ -155,6 +160,11 @@ async function resolveFieldGuids() {
   const transactionIdMatches = findByName(cfg.TRANSACTION_ID_FIELD_NAME || "");
   const paymentMethodMatches = findByName(cfg.PAYMENT_METHOD_FIELD_NAME || "");
   const checkNumberMatches = findByName(cfg.CHECK_NUMBER_FIELD_NAME || "");
+  const occupationMatches = findByName(cfg.OCCUPATION_FIELD_NAME || "");
+  const employerNameMatches = findByName(cfg.EMPLOYER_NAME_FIELD_NAME || "");
+  const employerCityMatches = findByName(cfg.EMPLOYER_CITY_FIELD_NAME || "");
+  const employerStateMatches = findByName(cfg.EMPLOYER_STATE_FIELD_NAME || "");
+  const contactTypeMatches = findByName(cfg.CONTACT_TYPE_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
   // ("Receipt"/"Payment") — no reliable way to tell which is which from the
@@ -168,7 +178,12 @@ async function resolveFieldGuids() {
     typeSubtypeCandidates: typeSubtypeMatches.map(guidOf).filter(Boolean),
     transactionId: guidOf(transactionIdMatches[0]),
     paymentMethodCandidates: paymentMethodMatches.map(guidOf).filter(Boolean),
-    checkNumberCandidates: checkNumberMatches.map(guidOf).filter(Boolean)
+    checkNumberCandidates: checkNumberMatches.map(guidOf).filter(Boolean),
+    occupation: guidOf(occupationMatches[0]),
+    employerName: guidOf(employerNameMatches[0]),
+    employerCity: guidOf(employerCityMatches[0]),
+    employerState: guidOf(employerStateMatches[0]),
+    contactType: guidOf(contactTypeMatches[0])
   };
 
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
@@ -179,7 +194,12 @@ async function resolveFieldGuids() {
     (resolvedGuids.typeSubtypeCandidates.length > 0 ? "✓" : "✗") + " Transaction Type (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\") — " + resolvedGuids.typeSubtypeCandidates.length + " field(s) found" + (resolvedGuids.typeSubtypeCandidates.length < 2 ? " (expected 2 — one for Receipts, one for Payments)" : ""),
     (resolvedGuids.paymentMethodCandidates.length > 0 ? "✓" : "✗") + " Payment Method (\"" + (cfg.PAYMENT_METHOD_FIELD_NAME || "") + "\") — " + resolvedGuids.paymentMethodCandidates.length + " field(s) found",
     (resolvedGuids.checkNumberCandidates.length > 0 ? "✓" : "✗") + " Check # (\"" + (cfg.CHECK_NUMBER_FIELD_NAME || "") + "\") — " + resolvedGuids.checkNumberCandidates.length + " field(s) found",
-    (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found")
+    (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found"),
+    (resolvedGuids.occupation ? "✓" : "✗") + " Occupation (\"" + (cfg.OCCUPATION_FIELD_NAME || "") + "\")" + (resolvedGuids.occupation ? "" : " — not found"),
+    (resolvedGuids.employerName ? "✓" : "✗") + " Employer Name (\"" + (cfg.EMPLOYER_NAME_FIELD_NAME || "") + "\")" + (resolvedGuids.employerName ? "" : " — not found"),
+    (resolvedGuids.employerCity ? "✓" : "✗") + " Employer City (\"" + (cfg.EMPLOYER_CITY_FIELD_NAME || "") + "\")" + (resolvedGuids.employerCity ? "" : " — not found"),
+    (resolvedGuids.employerState ? "✓" : "✗") + " Employer State (\"" + (cfg.EMPLOYER_STATE_FIELD_NAME || "") + "\")" + (resolvedGuids.employerState ? "" : " — not found"),
+    (resolvedGuids.contactType ? "✓" : "✗") + " Contact Type (\"" + (cfg.CONTACT_TYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.contactType ? "" : " — not found")
   ];
   statusEl.innerHTML = lines.join("<br>");
 
@@ -390,9 +410,54 @@ function extractDescription(detail, item) {
 // transaction is tied to an actual Customer or Supplier record, or as a
 // plain string otherwise. Handle both — this also fixes a crash where
 // downstream code assumed it was always a string.
-// Cache of resolved names by key, so the same repeated Customer/Supplier
-// isn't looked up again for every transaction that references it.
-let contactNameCache = {};
+
+// Full US state name -> USPS abbreviation. The Employer's State custom
+// field stores the full name (e.g. "Oregon"); ORESTAR's <state> element
+// expects the 2-letter code, same as everywhere else we handle state.
+const STATE_NAME_TO_ABBR = {
+  "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA","colorado":"CO",
+  "connecticut":"CT","delaware":"DE","florida":"FL","georgia":"GA","hawaii":"HI","idaho":"ID",
+  "illinois":"IL","indiana":"IN","iowa":"IA","kansas":"KS","kentucky":"KY","louisiana":"LA",
+  "maine":"ME","maryland":"MD","massachusetts":"MA","michigan":"MI","minnesota":"MN","mississippi":"MS",
+  "missouri":"MO","montana":"MT","nebraska":"NE","nevada":"NV","new hampshire":"NH","new jersey":"NJ",
+  "new mexico":"NM","new york":"NY","north carolina":"NC","north dakota":"ND","ohio":"OH","oklahoma":"OK",
+  "oregon":"OR","pennsylvania":"PA","rhode island":"RI","south carolina":"SC","south dakota":"SD",
+  "tennessee":"TN","texas":"TX","utah":"UT","vermont":"VT","virginia":"VA","washington":"WA",
+  "west virginia":"WV","wisconsin":"WI","wyoming":"WY","district of columbia":"DC"
+};
+function stateNameToAbbr(name) {
+  if (!name) return "";
+  const trimmed = String(name).trim();
+  if (trimmed.length === 2) return trimmed.toUpperCase(); // already an abbreviation
+  return STATE_NAME_TO_ABBR[trimmed.toLowerCase()] || trimmed;
+}
+
+// Maps whatever text the "Type" custom field stores to an ORESTAR contact
+// type code, checking against our known labels/codes case-insensitively,
+// plus a few common synonyms. Returns null (not a blank string) when
+// nothing matches, so callers can tell "unmatched" apart from "resolved to
+// something falsy" and fall back to the old heuristic guess instead.
+function mapContactTypeText(raw) {
+  if (!raw) return null;
+  const text = String(raw).trim().toLowerCase();
+  for (let i = 0; i < CONTACT_TYPES.length; i++) {
+    const code = CONTACT_TYPES[i][0], label = CONTACT_TYPES[i][1];
+    if (code.toLowerCase() === text || label.toLowerCase() === text) return code;
+  }
+  const synonyms = {
+    "individual": "I", "person": "I",
+    "business": "B", "company": "B", "corporation": "B", "llc": "B", "vendor": "B",
+    "committee": "C", "pac": "C", "political action committee": "C",
+    "union": "L", "labor union": "L",
+    "party": "P", "political party": "P"
+  };
+  return synonyms[text] || null;
+}
+
+// Cache of resolved contact records by key, so the same repeated
+// Customer/Supplier isn't looked up again for every transaction that
+// references it.
+let contactRecordCache = {};
 
 // customer/supplier/contact come back as bare key strings (confirmed from a
 // real export where the raw GUID ended up in the XML's business-name field)
@@ -400,9 +465,11 @@ let contactNameCache = {};
 // Resolve by fetching that record's own "-form" endpoint, same pattern as
 // receipt-form/payment-form. Endpoint names for these are unconfirmed —
 // trying the type-hinted one first, falling back to the others if it 404s.
-async function resolveKeyToName(key, hintedEndpoint) {
+// Also pulls Occupation/Employer/Type custom fields off that same record,
+// since they live there rather than on the transaction.
+async function resolveContactRecord(key, hintedEndpoint) {
   if (!key) return null;
-  if (contactNameCache[key]) return contactNameCache[key];
+  if (contactRecordCache[key]) return contactRecordCache[key];
 
   const endpoints = [hintedEndpoint, "customer-form", "supplier-form", "employee-form", "contact-form"]
     .filter(function(e, i, arr) { return e && arr.indexOf(e) === i; }); // unique, hinted one first
@@ -411,10 +478,18 @@ async function resolveKeyToName(key, hintedEndpoint) {
     try {
       const rec = await managerApi("GET", "/api2/" + endpoints[i] + "/" + key);
       const name = rec.Name || rec.name;
-      if (name) {
-        contactNameCache[key] = name;
-        return name;
-      }
+      if (!name) continue;
+
+      const result = {
+        name: name,
+        occupation: getCustomFieldValue(rec, resolvedGuids.occupation, "text") || "",
+        employerName: getCustomFieldValue(rec, resolvedGuids.employerName, "text") || "",
+        employerCity: getCustomFieldValue(rec, resolvedGuids.employerCity, "text") || "",
+        employerState: stateNameToAbbr(getCustomFieldValue(rec, resolvedGuids.employerState, "text")),
+        type: mapContactTypeText(getCustomFieldValue(rec, resolvedGuids.contactType, "text"))
+      };
+      contactRecordCache[key] = result;
+      return result;
     } catch (e) {
       // try the next candidate endpoint
     }
@@ -422,12 +497,11 @@ async function resolveKeyToName(key, hintedEndpoint) {
   return null;
 }
 
-async function extractContactName(detail, item) {
-  // Confirmed from a real export: the actual fields are lowercase
-  // "customer" / "supplier" / "contact" — exactly one of these three is
-  // populated depending on who the transaction is with, and each is a bare
-  // key string, not an inline name. Old guesses (Payee/Payer/Name) kept as
-  // a last-resort fallback in case a different record type uses those.
+// Returns { name, occupation, employerName, employerCity, employerState, type }
+// (type/occupation/employer fields empty-string or null if unresolved/not
+// applicable) — or a record with a unique placeholder name and no resolved
+// details if nothing could be linked at all.
+async function resolveContactInfo(detail, item) {
   const refPairs = [
     [detail && detail.customer, "customer-form"],
     [detail && detail.supplier, "supplier-form"],
@@ -451,8 +525,8 @@ async function extractContactName(detail, item) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) return inlineName;
-    const resolved = await resolveKeyToName(key, hint);
+    if (inlineName) return { name: inlineName, occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+    const resolved = await resolveContactRecord(key, hint);
     if (resolved) return resolved;
   }
 
@@ -463,7 +537,9 @@ async function extractContactName(detail, item) {
     item && item.Payee, item && item.Payer, item && item.Name
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
-    if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) return plainTextCandidates[i];
+    if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
+      return { name: plainTextCandidates[i], occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
+    }
   }
 
   // None of the above had anything — genuinely no linked party. Fall back
@@ -471,7 +547,7 @@ async function extractContactName(detail, item) {
   // multiple different blank transactions don't get merged into a single
   // contact entry (editing one would otherwise silently edit them all).
   const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return "(no contact - " + String(fallbackKey).slice(0, 8) + ")";
+  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", occupation: "", employerName: "", employerCity: "", employerState: "", type: null };
 }
 
 function extractAccountRef(item, detail) {
@@ -518,7 +594,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const tranDate = dateOnly(detail.Date || item.Date || item.date);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
     const amount = extractAmount(detail, item);
-    const contactName = await extractContactName(detail, item);
+    const contactInfo = await resolveContactInfo(detail, item);
+    const contactName = contactInfo.name;
     const description = extractDescription(detail, item);
 
     if (!loggedSample[sourceLabel]) {
@@ -553,6 +630,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       accountName: acctRef.name || acctRef.key || "(unknown)",
       amount: amount,
       contactName: contactName,
+      contactInfo: contactInfo,
       typeCode: typeCode,
       subCode: subCode,
       description: description,
@@ -605,7 +683,7 @@ function renderReview() {
 
   loadedTransactions.forEach(function(t, idx) {
     if (!contactsByName[t.contactName]) {
-      contactsByName[t.contactName] = guessContact(t.contactName);
+      contactsByName[t.contactName] = buildContactFromInfo(t.contactName, t.contactInfo);
     }
 
     const tr = document.createElement("tr");
@@ -677,6 +755,34 @@ function guessContact(name) {
     street1: "", city: "", state: "", zip: "", county: "",
     occupation: "", employerName: "", employerCity: "", employerState: ""
   };
+}
+
+// Starts from the name-splitting heuristic (still needed for first/last vs.
+// business-name structure), then overrides with real resolved data from the
+// Customer/Supplier/Employee record wherever we actually have it — type,
+// occupation, and employer info no longer need to be guessed or hand-typed
+// when Manager already has them.
+function buildContactFromInfo(name, info) {
+  const base = guessContact(name);
+  if (!info) return base;
+  if (info.type) {
+    base.type = info.type;
+    // Re-split the name according to the *real* type, not the heuristic's guess.
+    if (info.type === "I" || info.type === "F") {
+      const parts = name.trim().split(/\s+/);
+      base.first = parts[0] || "";
+      base.last = parts.slice(1).join(" ");
+      base.business = "";
+    } else {
+      base.business = name;
+      base.first = ""; base.last = "";
+    }
+  }
+  if (info.occupation) base.occupation = info.occupation;
+  if (info.employerName) base.employerName = info.employerName;
+  if (info.employerCity) base.employerCity = info.employerCity;
+  if (info.employerState) base.employerState = info.employerState;
+  return base;
 }
 
 function renderContacts() {

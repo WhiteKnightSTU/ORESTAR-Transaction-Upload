@@ -23,5 +23,14 @@ const ORESTAR_CONFIG = {
   PAYMENT_METHOD_FIELD_NAME: "Payment Method",
 
   // Number-type field holding the check number, when applicable.
-  CHECK_NUMBER_FIELD_NAME: "Check #"
+  CHECK_NUMBER_FIELD_NAME: "Check #",
+
+  // The following live on the Customer/Supplier/Employee record itself
+  // (not on Receipts/Payments) — resolved automatically when a contact is
+  // looked up by key, same lookup that resolves the display name.
+  OCCUPATION_FIELD_NAME: "Occupation Information: Occupation",
+  EMPLOYER_NAME_FIELD_NAME: "Occupational Information: Employer's Name",
+  EMPLOYER_CITY_FIELD_NAME: "Occupational Information: Employer's City",
+  EMPLOYER_STATE_FIELD_NAME: "Occupational Information: Employer's State", // stores full state name, e.g. "Oregon"
+  CONTACT_TYPE_FIELD_NAME: "Type" // stores the entity type (Individual/Business/etc.)
 };
