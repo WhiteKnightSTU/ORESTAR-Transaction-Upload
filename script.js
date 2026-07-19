@@ -182,28 +182,28 @@ async function apiGetV4(path) {
 // /api4/businesses lists what this token can access; if there's exactly one,
 // we use it directly rather than requiring manual entry at all.
 async function detectBusinessName() {
-  // Prefer /api2, since it's been reliably reachable this whole time, unlike
-  // /api4 which has had repeated connectivity issues on this setup.
+  // A direct browser GET to /api4/businesses returned 401 (not 404) — meaning
+  // this route genuinely exists and just needs credentials. Restored after
+  // wrongly ruling it out based on a misleading OPTIONS 404 (which shouldn't
+  // even fire for a same-origin request in the first place).
   try {
-    return await fetchBusinessNameFromApi2();
+    const res = await fetch(`${getBaseUrlV4()}/businesses`, {
+      headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
+    });
+    if (!res.ok) throw new Error(`GET /businesses failed: HTTP ${res.status}`);
+    const data = await res.json();
+    const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+    const businesses = arrayKey ? data[arrayKey] : (Array.isArray(data) ? data : []);
+    if (businesses.length === 1) return businesses[0].Name || businesses[0].name;
+    if (businesses.length > 1) {
+      const names = businesses.map(b => b.Name || b.name).join(", ");
+      throw new Error(`Multiple businesses found (${names}) — set Business Name manually to the one you want.`);
+    }
+    throw new Error("No businesses returned.");
   } catch (e) {
-    console.warn("[ORESTAR] api2-based business name lookup failed, trying /api4/businesses:", e.message);
+    console.warn("[ORESTAR] /api4/businesses failed, trying Business Details record instead:", e.message);
   }
-
-  const res = await fetch(`${getBaseUrlV4()}/businesses`, {
-    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
-  });
-  if (!res.ok) throw new Error(`GET /businesses failed: HTTP ${res.status}`);
-  const data = await res.json();
-  const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-  const businesses = arrayKey ? data[arrayKey] : (Array.isArray(data) ? data : []);
-  if (businesses.length === 0) throw new Error("No businesses returned from /api4/businesses.");
-  if (businesses.length === 1) {
-    return businesses[0].Name || businesses[0].name;
-  }
-  // Multiple businesses on this server/token — can't guess, list them for manual pick.
-  const names = businesses.map(b => b.Name || b.name).join(", ");
-  throw new Error(`Multiple businesses found (${names}) — set Business Name manually to the one you want.`);
+  return await fetchBusinessNameFromApi2();
 }
 
 // UNCONFIRMED: Manager's update verb for api2 isn't documented anywhere I could
@@ -338,13 +338,32 @@ async function fetchBusinessDetailsRecord() {
   for (const path of BUSINESS_DETAILS_CANDIDATES) {
     try {
       detail = await apiGet(path);
-      workingPath = path;
-      attempts.push(`${path} — SUCCESS`);
+      workingPath = `api2:${path}`;
+      attempts.push(`${path} (api2) — SUCCESS`);
       break;
     } catch (e) {
-      attempts.push(`${path} — ${e.message}`);
-      console.warn(`[ORESTAR] ${path} failed:`, e.message);
+      attempts.push(`${path} (api2) — ${e.message}`);
+      console.warn(`[ORESTAR] api2 ${path} failed:`, e.message);
     }
+  }
+
+  // Business Details may live under /api4 instead, like custom-fields and
+  // bank-and-cash-accounts turned out to — only try this if a business name
+  // is set, since api4 calls require it.
+  if (!detail && getBusinessName()) {
+    for (const path of BUSINESS_DETAILS_CANDIDATES) {
+      try {
+        detail = await apiGetV4(path);
+        workingPath = `api4:${path}`;
+        attempts.push(`${path} (api4) — SUCCESS`);
+        break;
+      } catch (e) {
+        attempts.push(`${path} (api4) — ${e.message}`);
+        console.warn(`[ORESTAR] api4 ${path} failed:`, e.message);
+      }
+    }
+  } else if (!detail) {
+    attempts.push("(skipped api4 attempts — set Business Name first, since api4 calls require it)");
   }
 
   if (!detail) {
