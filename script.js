@@ -528,6 +528,32 @@ function parseAddressBlock(raw) {
   return { street1: street1, city: city, state: state, zip: zip };
 }
 
+// Cached supplier list, fetched once and matched client-side by name — used
+// to find a richer Supplier record for someone who's primarily linked as an
+// Employee, since Suppliers have consistently had fuller data in testing.
+// UNCONFIRMED endpoint — following the plural-list convention that's worked
+// for /receipts, /payments, etc.
+let supplierListCache = null;
+async function getSupplierList() {
+  if (supplierListCache) return supplierListCache;
+  try {
+    const data = await managerApi("GET", "/api2/suppliers?pageSize=1000");
+    const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
+    supplierListCache = arrayKey ? data[arrayKey] : [];
+  } catch (e) {
+    console.warn("[ORESTAR] Could not fetch supplier list for name-matching:", e.message);
+    supplierListCache = [];
+  }
+  return supplierListCache;
+}
+async function findSupplierKeyByName(name) {
+  if (!name) return null;
+  const list = await getSupplierList();
+  const target = name.trim().toLowerCase();
+  const match = list.find(function(s) { return (s.Name || s.name || "").trim().toLowerCase() === target; });
+  return match ? (match.key || match.Key) : null;
+}
+
 async function resolveContactRecord(key, hintedEndpoint) {
   if (!key) return null;
   if (contactRecordCache[key]) return contactRecordCache[key];
@@ -595,20 +621,31 @@ async function resolveContactRecord(key, hintedEndpoint) {
 // (type/occupation/employer fields empty-string or null if unresolved/not
 // applicable) — or a record with a unique placeholder name and no resolved
 // details if nothing could be linked at all.
-async function resolveContactInfo(detail, item) {
-  const refPairs = [
+async function resolveContactInfo(detail, item, sourceLabel) {
+  const employeeRefs = [
+    [detail && detail.employee, "employee-form"],
+    [detail && detail.Employee, "employee-form"],
+    [item && item.employee, "employee-form"],
+    [item && item.Employee, "employee-form"]
+  ];
+  const otherRefs = [
     [detail && detail.customer, "customer-form"],
     [detail && detail.supplier, "supplier-form"],
     [detail && detail.contact, "contact-form"],
-    [detail && detail.employee, "employee-form"],
     [detail && detail.Customer, "customer-form"],
     [detail && detail.Supplier, "supplier-form"],
     [detail && detail.Contact, "contact-form"],
-    [detail && detail.Employee, "employee-form"],
     [item && item.customer, "customer-form"],
     [item && item.supplier, "supplier-form"],
     [item && item.contact, "contact-form"]
   ];
+  // Expense Claims are about reimbursing the Employee who incurred the
+  // cost — not whatever "Payee" the underlying purchase happened to be
+  // made out to. Employee takes priority for that source; everything else
+  // keeps the original customer/supplier/contact-first order.
+  const refPairs = sourceLabel === "Expense Claim" ? employeeRefs.concat(otherRefs) : otherRefs.concat(employeeRefs);
+
+  let resolvedInfo = null;
   for (let i = 0; i < refPairs.length; i++) {
     const ref = refPairs[i][0], hint = refPairs[i][1];
     if (!ref) continue;
@@ -619,9 +656,24 @@ async function resolveContactInfo(detail, item) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) return { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
+    if (inlineName) { resolvedInfo = { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null }; break; }
     const resolved = await resolveContactRecord(key, hint);
-    if (resolved) return resolved;
+    if (resolved) { resolvedInfo = resolved; break; }
+  }
+
+  if (resolvedInfo) {
+    // Employee records tend to have thinner data than Suppliers (per what
+    // we've already confirmed works well there) — if a Supplier exists
+    // with the exact same name, prefer that richer record's details for
+    // the actual XML export, while keeping the resolved name itself as-is.
+    if (resolvedInfo.recordEndpoint === "employee-form") {
+      const supplierKey = await findSupplierKeyByName(resolvedInfo.name);
+      if (supplierKey && supplierKey !== resolvedInfo.recordKey) {
+        const supplierInfo = await resolveContactRecord(supplierKey, "supplier-form");
+        if (supplierInfo) return supplierInfo;
+      }
+    }
+    return resolvedInfo;
   }
 
   // Older, never-fully-confirmed field-name guesses, treated as already
@@ -714,10 +766,14 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const acctRef = extractAccountRef(item, detail);
     if (selectedKeys.length > 0 && acctRef.key && selectedKeys.indexOf(acctRef.key) === -1) continue;
 
-    const tranDate = dateOnly(detail.Date || item.Date || item.date);
+    // Purchase Invoices commonly use "IssueDate" rather than "Date" (unlike
+    // Receipts/Payments) — checking both plus a couple other likely variants.
+    const tranDate = dateOnly(detail.Date || item.Date || item.date ||
+                               detail.IssueDate || item.IssueDate || detail.issueDate || item.issueDate ||
+                               detail.InvoiceDate || item.InvoiceDate);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
     const amount = extractAmount(detail, item);
-    const contactInfo = await resolveContactInfo(detail, item);
+    const contactInfo = await resolveContactInfo(detail, item, sourceLabel);
     const contactName = contactInfo.name;
     const description = extractDescription(detail, item);
 
@@ -725,6 +781,9 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       console.log("[ORESTAR] Sample raw " + sourceLabel + " record (list item):", item);
       console.log("[ORESTAR] Sample raw " + sourceLabel + " record (detail):", detail);
       loggedSample[sourceLabel] = true;
+    }
+    if (!tranDate) {
+      console.warn("[ORESTAR] No date field matched for " + sourceLabel + " " + key + " — check the sample record above for the real field name.");
     }
 
     let typeCode, subCode;
