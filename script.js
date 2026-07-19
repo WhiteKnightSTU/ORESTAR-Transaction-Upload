@@ -101,8 +101,21 @@ async function postMessageWithResponse(message) {
       if (d && d.type && d.type.endsWith("-response") && d.requestId === requestId) {
         clearTimeout(t);
         window.removeEventListener("message", onMessage);
-        if (d.error) reject(new Error(d.error));
-        else if (d.status && d.status >= 400) reject(new Error("HTTP " + d.status + ": " + JSON.stringify(d.body)));
+        if (d.error) {
+          // Manager's own proxy appears to call response.json() unconditionally.
+          // A successful write (PUT/PATCH) commonly returns 204 No Content —
+          // no body at all — which throws exactly this standard browser error
+          // even though the underlying write succeeded. Treat it as success
+          // rather than a real failure, since the error text itself is
+          // diagnostic of "empty body," not of the request having failed.
+          if (String(d.error).indexOf("Unexpected end of JSON input") !== -1) {
+            resolve(d.body || {});
+            return;
+          }
+          reject(new Error(d.error));
+          return;
+        }
+        if (d.status && d.status >= 400) reject(new Error("HTTP " + d.status + ": " + JSON.stringify(d.body)));
         else resolve(d.body);
       }
     }
@@ -418,13 +431,25 @@ function selectedAccountKeys() {
 // common candidates plus a Lines-array fallback (summing line amounts) in
 // case there's no single top-level total.
 function extractAmount(detail, item) {
-  const direct = getAmountValue(
-    (detail && detail.Amount != null) ? detail.Amount :
-    (detail && detail.Total != null) ? detail.Total :
-    (detail && detail.TotalAmount != null) ? detail.TotalAmount :
-    (item && item.Amount != null) ? item.Amount :
-    (item && item.Total != null) ? item.Total : null
+  function firstDefined() {
+    for (let i = 0; i < arguments.length; i++) {
+      if (arguments[i] != null) return arguments[i];
+    }
+    return null;
+  }
+  // Purchase Invoices / Expense Claims have already shown different field
+  // names than Receipts/Payments once (IssueDate vs Date) — broadening the
+  // candidate list here for the same reason rather than assuming Amount/
+  // Total covers every record type.
+  const raw = firstDefined(
+    detail && detail.Amount, detail && detail.Total, detail && detail.TotalAmount,
+    detail && detail.Balance, detail && detail.AmountDue, detail && detail.GrandTotal,
+    detail && detail.InvoiceTotal, detail && detail.ClaimAmount, detail && detail.ClaimTotal,
+    detail && detail.NetAmount,
+    item && item.Amount, item && item.Total, item && item.Balance,
+    item && item.AmountDue, item && item.GrandTotal, item && item.ClaimAmount
   );
+  const direct = getAmountValue(raw);
   if (direct) return Math.abs(direct);
 
   const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
@@ -508,6 +533,30 @@ let contactRecordCache = {};
 // if it was already filed in an earlier export, that's the real ORESTAR id
 // we need for associated-tran; if blank, it hasn't been filed yet.
 let invoiceTxnIdCache = {};
+// CRITICAL: PUT appears to replace the ENTIRE resource in Manager's API,
+// not merge fields — a partial body (just a custom field) wiped out Date,
+// Amount, linked Customer/Supplier, and Lines on real records. Every write
+// now fetches the full current record first, merges in only the one field
+// being changed, and sends the complete object back so nothing else is lost.
+async function safeSetCustomField(formPath, key, fieldGuid, kind, value) {
+  const current = await managerApi("GET", "/api2" + formPath + "/" + key);
+  const cf = current.CustomFields2 || current.customFields2 || {};
+  // Preserve whichever casing this record already uses, both for the
+  // container and the bucket, rather than assuming one or the other.
+  const usesLowerContainer = !!current.customFields2 && !current.CustomFields2;
+  const bucketNames = kind === "checkbox" ? ["Checkboxes", "checkboxes"] :
+                       kind === "number" ? ["Decimals", "decimals"] : ["Strings", "strings"];
+  const existingBucketName = bucketNames.find(function(b) { return cf[b] !== undefined; }) || bucketNames[0];
+  if (!cf[existingBucketName]) cf[existingBucketName] = {};
+  cf[existingBucketName][fieldGuid] = value;
+  if (usesLowerContainer) {
+    current.customFields2 = cf;
+  } else {
+    current.CustomFields2 = cf;
+  }
+  await managerApi("PUT", "/api2" + formPath + "/" + key, current);
+}
+
 async function resolveInvoiceTransactionId(key) {
   if (invoiceTxnIdCache[key] !== undefined) return invoiceTxnIdCache[key];
   try {
@@ -824,6 +873,9 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     }
     if (!tranDate) {
       console.warn("[ORESTAR] No date field matched for " + sourceLabel + " " + key + " — check the sample record above for the real field name.");
+    }
+    if (!amount) {
+      console.warn("[ORESTAR] No amount field matched for " + sourceLabel + " " + key + " (resolved to 0) — check the sample record above for the real field name.");
     }
 
     let typeCode, subCode;
@@ -1168,9 +1220,7 @@ document.getElementById("savePeopleIdsBtn").addEventListener("click", async func
       continue;
     }
     try {
-      const body = { CustomFields2: { Decimals: {} } };
-      body.CustomFields2.Decimals[resolvedGuids.peopleId] = Number(c.peopleId);
-      await managerApi("PUT", "/api2/" + c.recordEndpoint + "/" + c.recordKey, body);
+      await safeSetCustomField("/" + c.recordEndpoint, c.recordKey, resolvedGuids.peopleId, "number", Number(c.peopleId));
       succeeded++;
     } catch (e) {
       failures.push(c.recordKey + ": " + e.message);
@@ -1396,9 +1446,7 @@ document.getElementById("saveTxnIdsBtn").addEventListener("click", async functio
   for (const entry of entries) {
     const t = loadedTransactions[entry.idx];
     try {
-      const body = { CustomFields2: { Decimals: {} } };
-      body.CustomFields2.Decimals[cfTransactionId] = Number(entry.value);
-      await managerApi("PUT", "/api2" + t.formPath + "/" + t.key, body);
+      await safeSetCustomField(t.formPath, t.key, cfTransactionId, "number", Number(entry.value));
       succeeded++;
     } catch (e) {
       failures.push(t.source + " " + t.key + " (entered ID " + entry.value + "): " + e.message);
