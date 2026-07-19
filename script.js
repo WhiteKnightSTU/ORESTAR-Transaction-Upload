@@ -95,6 +95,13 @@ function saveConfig() {
 function getBaseUrl() {
   return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
 }
+// Manager runs two parallel API generations on the same server — the older
+// /api2 (receipts, payments, business-details, etc.) and a newer /api4 that
+// some newer resources live under exclusively (confirmed: bank-or-cash-account).
+// Derived by swapping the version segment in whatever /api2 URL was configured.
+function getBaseUrlV4() {
+  return getBaseUrl().replace(/\/api2$/i, "/api4");
+}
 function getApiToken() {
   return document.getElementById("apiToken").value.trim();
 }
@@ -148,6 +155,14 @@ async function apiGet(path) {
     headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
   });
   if (!res.ok) throw new Error(`GET ${path} failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+async function apiGetV4(path) {
+  const res = await fetch(`${getBaseUrlV4()}${path}`, {
+    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
+  });
+  if (!res.ok) throw new Error(`GET (v4) ${path} failed: HTTP ${res.status}`);
   return res.json();
 }
 
@@ -272,14 +287,11 @@ async function fetchFilerId(filerFieldId) {
 // Accounts" tab in the UI). Trying the plural form first since every other
 // Manager list endpoint we've confirmed (/receipts, /payments, /customers)
 // is plural — falling back to the exact singular form given if that 404s.
+// Confirmed via live testing: this resource lives under /api4, not /api2 —
+// singular "account", unlike most /api2 list endpoints (receipts, payments)
+// which are plural.
 async function fetchAccounts() {
-  let data;
-  try {
-    data = await apiGet(`/bank-or-cash-accounts?pageSize=1000`);
-  } catch (e) {
-    console.warn("Plural /bank-or-cash-accounts failed, trying singular:", e.message);
-    data = await apiGet(`/bank-or-cash-account?pageSize=1000`);
-  }
+  const data = await apiGetV4(`/bank-or-cash-account?pageSize=1000`);
   const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
   const items = arrayKey ? data[arrayKey] : [];
   return items.map(a => {
