@@ -23,12 +23,8 @@ const SUBTYPE_OPTIONS = {
          ["RT","Return of Refund of Contributions"]]
 };
 
-// Best-guess default sub-type when your field only captured the top-level
-// Type (no cascading subtype is offered for that category in Manager).
 const DEFAULT_SUBTYPE = { "C": "CA", "OA": "OR", "OR": "OM", "E": "CE", "OD": "OMD" };
 
-// Maps the human text stored in your Contribution subtype dropdown to its
-// ORESTAR code (only Contributions currently cascades in Manager).
 const SUBTYPE_TEXT_TO_CODE = {
   "Cash Contribution": "CA",
   "In-Kind Contribution": "IK",
@@ -45,18 +41,36 @@ const CONTACT_TYPES = [
   ["L","Labor Organization"], ["O","Other"], ["C","Political Committee"], ["P","Political Party Committee"]
 ];
 
-/* ============================================================ */
-
-let loadedTransactions = []; // { source, key, formPath, date, enteredDate, accountName, amount, contactName, typeCode, subCode, description, paymentMethod, checkNo }
+let loadedTransactions = [];
 let contactsByName = {};
-let availableAccounts = [];  // { key, name, kind: 'bank'|'cash' }
+let availableAccounts = [];
 
-/* ============================================================
-   Connection config — persisted in this browser's localStorage
-   instead of coming from Manager's injected iframe context. This
-   page can now be opened directly (bookmark, new tab) rather than
-   depending on the Custom Buttons/Extensions embed mechanism.
-   ============================================================ */
+async function postMessageWithResponse(message) {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const t = setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("Timed out waiting for Manager response (10s) - make sure this page is loaded via its registered Custom Button inside Manager, not opened standalone."));
+    }, 10000);
+    function onMessage(e) {
+      const d = e.data;
+      if (d && d.type && d.type.endsWith("-response") && d.requestId === requestId) {
+        clearTimeout(t);
+        window.removeEventListener("message", onMessage);
+        if (d.error) reject(new Error(d.error));
+        else if (d.status && d.status >= 400) reject(new Error("HTTP " + d.status + ": " + JSON.stringify(d.body)));
+        else resolve(d.body);
+      }
+    }
+    window.addEventListener("message", onMessage);
+    window.parent.postMessage(Object.assign({}, message, { requestId: requestId }), "*");
+  });
+}
+
+async function managerApi(method, path, body) {
+  return await postMessageWithResponse({ type: "api-request", method: method, path: path, body: body || null });
+}
+
 const STORAGE_KEY = "orestar_export_config";
 
 function loadStoredConfig() {
@@ -68,10 +82,7 @@ function loadStoredConfig() {
 }
 function saveConfig() {
   const cfg = {
-    baseUrl: document.getElementById("baseUrl").value.trim(),
-    apiToken: document.getElementById("apiToken").value.trim(),
-    businessName: document.getElementById("businessName").value.trim(),
-    filerId: document.getElementById("filerId").value.trim(),
+    cfFiler: document.getElementById("cfFiler").value.trim(),
     cfTypeSubtype: document.getElementById("cfTypeSubtype").value.trim(),
     cfDownloaded: document.getElementById("cfDownloaded").value.trim()
   };
@@ -83,37 +94,25 @@ function saveConfig() {
 }
 (function restoreConfig() {
   const cfg = loadStoredConfig();
-  if (cfg.baseUrl) document.getElementById("baseUrl").value = cfg.baseUrl;
-  if (cfg.apiToken) document.getElementById("apiToken").value = cfg.apiToken;
-  if (cfg.businessName) document.getElementById("businessName").value = cfg.businessName;
-  if (cfg.filerId) document.getElementById("filerId").value = cfg.filerId;
+  if (cfg.cfFiler) document.getElementById("cfFiler").value = cfg.cfFiler;
   if (cfg.cfTypeSubtype) document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype;
   if (cfg.cfDownloaded) document.getElementById("cfDownloaded").value = cfg.cfDownloaded;
 })();
-["baseUrl", "apiToken", "businessName", "filerId", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+["cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(function(id) {
   document.getElementById(id).addEventListener("change", saveConfig);
 });
 
-function getBusinessName() {
-  return document.getElementById("businessName").value.trim();
-}
-
-function getBaseUrl() {
-  return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
-}
-// Manager runs two parallel API generations on the same server — the older
-// /api2 (receipts, payments, business-details, etc.) and a newer /api4 that
-// some newer resources live under exclusively (confirmed: bank-or-cash-account).
-// Derived by swapping the version segment in whatever /api2 URL was configured.
-function getBaseUrlV4() {
-  return getBaseUrl().replace(/\/api2$/i, "/api4");
-}
-function getApiToken() {
-  return document.getElementById("apiToken").value.trim();
-}
-function hasConnection() {
-  return !!(getBaseUrl() && getApiToken());
-}
+document.getElementById("forgetBtn").addEventListener("click", function() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (e) {
+    console.warn("Could not clear localStorage:", e.message);
+  }
+  ["cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(function(id) {
+    document.getElementById(id).value = "";
+  });
+  showStatus("ok", "Saved field GUIDs cleared from this browser.");
+});
 
 function showStatus(kind, message) {
   const el = document.getElementById("status");
@@ -127,9 +126,9 @@ function showMarkStatus(kind, message) {
 }
 
 function escapeXml(str) {
-  return String(str ?? "").replace(/[<>&'"]/g, c => ({
-    "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;"
-  }[c]));
+  return String(str == null ? "" : str).replace(/[<>&'"]/g, function(c) {
+    return { "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c];
+  });
 }
 
 function getAmountValue(v) {
@@ -143,9 +142,6 @@ function dateOnly(v) {
   return String(v).slice(0, 10);
 }
 
-// Manager's "Timestamp" field is when the record was actually created/last
-// touched (system clock, stored as UTC). Shown for reference only — filtering
-// is now driven by the "Downloaded" checkbox, not by date.
 function localDateFromTimestamp(ts) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -153,165 +149,45 @@ function localDateFromTimestamp(ts) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return y + "-" + m + "-" + day;
 }
-
-async function apiGet(path) {
-  const res = await fetch(`${getBaseUrl()}${path}`, {
-    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
-  });
-  if (!res.ok) throw new Error(`GET ${path} failed: HTTP ${res.status}`);
-  return res.json();
-}
-
-async function apiGetV4(path) {
-  const businessName = getBusinessName();
-  if (!businessName) throw new Error("Business Name isn't set yet — click \"Detect Business\" above, or it should auto-fill after Test Connection.");
-  const separator = path.includes("?") ? "&" : "?";
-  const url = `${getBaseUrlV4()}${path}${separator}business=${encodeURIComponent(businessName)}`;
-  const res = await fetch(url, {
-    headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
-  });
-  if (!res.ok) throw new Error(`GET (v4) ${path} failed: HTTP ${res.status}`);
-  return res.json();
-}
-
-// UNCONFIRMED: Manager's update verb for api2 isn't documented anywhere I could
-// find. Guessing PUT (standard REST convention, matches their "-form/{key}"
-// pattern for a single record). Falls back to PATCH if PUT is rejected outright.
-async function apiUpdate(path, body) {
-  let res = await fetch(`${getBaseUrl()}${path}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Api-Key": getApiToken()
-    },
-    body: JSON.stringify(body)
-  });
-  if (res.status === 404 || res.status === 405) {
-    res = await fetch(`${getBaseUrl()}${path}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": getApiToken()
-      },
-      body: JSON.stringify(body)
-    });
-  }
-  if (!res.ok) throw new Error(`Update ${path} failed: HTTP ${res.status}`);
-  return res.json().catch(() => ({}));
-}
-
-document.getElementById("forgetBtn").addEventListener("click", () => {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch (e) {
-    console.warn("Could not clear localStorage:", e.message);
-  }
-  ["baseUrl", "apiToken", "businessName", "filerId", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
-    document.getElementById(id).value = "";
-  });
-  const el = document.getElementById("connStatus");
-  el.style.display = "block";
-  el.className = "banner";
-  el.textContent = "Saved credentials and config cleared from this browser.";
-});
-
-document.getElementById("testConnBtn").addEventListener("click", async () => {
-  const el = document.getElementById("connStatus");
-  el.style.display = "block";
-  el.className = "banner";
-  el.textContent = "Testing connection…";
-  if (!hasConnection()) {
-    el.textContent = "Fill in both the Base URL and Access Token first.";
-    return;
-  }
-  try {
-    // /receipts is well-confirmed from community examples — testing against
-    // it keeps this check independent of the still-uncertain Business
-    // Details endpoint name, so a wrong guess there doesn't make basic
-    // connectivity look broken too.
-    await apiGet(`/receipts?pageSize=1`);
-    saveConfig();
-    el.textContent = "Connected successfully.";
-  } catch (e) {
-    el.textContent = `Connection failed: ${e.message}. Double-check the Base URL (should end in /api2, no trailing slash issues) and that the Access Token is still valid in Settings → Access Tokens.`;
-  }
-});
 
 function getCustomFieldValue(detail, fieldId, kind) {
   if (!detail || !fieldId) return undefined;
-  // Case uncertainty: /api2 examples we've confirmed use "CustomFields2" /
-  // "Strings" (PascalCase); a more recent third-party writeup describes
-  // "customFields2" / "decimals" (camelCase) for /api3-/api4-style payloads.
-  // Check both rather than betting on one.
-  const cf = detail.CustomFields2 || detail.customFields2;
+  const cf = detail.customFields2 || detail.CustomFields2;
   if (!cf) return undefined;
 
-  const pick = (...keys) => {
-    for (const k of keys) {
+  function pick() {
+    for (let i = 0; i < arguments.length; i++) {
+      const k = arguments[i];
       if (cf[k] && cf[k][fieldId] !== undefined) return cf[k][fieldId];
     }
     return undefined;
-  };
+  }
 
   if (kind === "checkbox") {
-    return pick("Checkboxes", "checkboxes", "Booleans", "booleans");
+    return pick("checkboxes", "Checkboxes", "booleans", "Booleans");
   }
   if (kind === "number") {
-    return pick("Decimals", "decimals", "Numbers", "numbers", "Strings", "strings");
+    return pick("decimals", "Decimals", "numbers", "Numbers", "strings", "Strings");
   }
-  return pick("Strings", "strings");
+  return pick("strings", "Strings");
 }
 
-// One-off experimental test for a specific new candidate ("business-details-form",
-// no trailing key) suggested from a third-party writeup — NOT otherwise trusted,
-// since that writeup also claimed /api4/custom-fields doesn't exist, which we've
-// directly disproved with our own testing. Testing this one lead cheaply rather
-// than dismissing or re-building the whole auto-fetch mechanism around it.
-async function testBusinessDetailsForm() {
-  const results = [];
-  const guid = document.getElementById("bizGuid").value.trim();
-  const path = guid ? `/business-details-form/${guid}` : "/business-details-form";
-
-  try {
-    const data = await apiGet(path);
-    results.push(`api2 ${path} — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
-    console.log(`[ORESTAR] api2 ${path} raw response:`, data);
-  } catch (e) {
-    results.push(`api2 ${path} — ${e.message}`);
-  }
-  if (getBusinessName()) {
-    try {
-      const data = await apiGetV4(path);
-      results.push(`api4 ${path} — SUCCESS. Raw keys: ${Object.keys(data).join(", ")}`);
-      console.log(`[ORESTAR] api4 ${path} raw response:`, data);
-    } catch (e) {
-      results.push(`api4 ${path} — ${e.message}`);
-    }
-  } else {
-    results.push(`api4 ${path} — skipped (set Business Name first)`);
-  }
-  return results;
+async function fetchFilerId(filerFieldId) {
+  const detail = await managerApi("GET", "/api4/business-details");
+  const raw = getCustomFieldValue(detail, filerFieldId, "number");
+  if (raw == null || raw === "") throw new Error("Filer ID field came back empty - check the GUID and that the field actually has a value set in Business Details.");
+  const cleaned = String(raw).trim();
+  if (!/^\d+$/.test(cleaned)) throw new Error("Filer ID value \"" + cleaned + "\" isn't a plain positive integer - ORESTAR requires filer-id to be numeric.");
+  return cleaned;
 }
 
-// Endpoint confirmed by user: "bank-or-cash-account" is the combined resource
-// covering both Bank and Cash accounts (matches the single "Bank and Cash
-// Accounts" tab in the UI). Trying the plural form first since every other
-// Manager list endpoint we've confirmed (/receipts, /payments, /customers)
-// is plural — falling back to the exact singular form given if that 404s.
-// Confirmed via live testing: this resource lives under /api4, not /api2 —
-// singular "account", unlike most /api2 list endpoints (receipts, payments)
-// which are plural.
-// Confirmed via live discovery sweep: this resource is /bank-and-cash-accounts
-// ("and", not "or") on the regular /api2 base — no /api4 needed after all.
 async function fetchAccounts() {
-  const data = await apiGet(`/bank-and-cash-accounts?pageSize=1000`);
-  const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+  const data = await managerApi("GET", "/api2/bank-and-cash-accounts?pageSize=1000");
+  const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
   const items = arrayKey ? data[arrayKey] : [];
-  return items.map(a => {
-    // Field name for bank-vs-cash isn't confirmed — check common candidates,
-    // fall back to a generic label rather than guessing wrong silently.
+  return items.map(function(a) {
     const rawKind = a.Type || a.AccountType || a.Kind || (a.IsCashAccount ? "Cash" : null);
     return {
       key: a.key || a.Key,
@@ -321,118 +197,78 @@ async function fetchAccounts() {
   });
 }
 
-document.getElementById("listFieldsBtn").addEventListener("click", async () => {
+document.getElementById("listFieldsBtn").addEventListener("click", async function() {
   const el = document.getElementById("fieldsListResult");
-  if (!hasConnection()) {
-    el.innerHTML = `<span class="small">Fill in Base URL and Access Token, and Test Connection first.</span>`;
-    return;
-  }
-  el.innerHTML = `<span class="small">Loading custom field definitions…</span>`;
+  el.innerHTML = '<span class="small">Loading custom field definitions…</span>';
   try {
-    const data = await apiGetV4(`/custom-fields?pageSize=1000`);
-    const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+    const data = await managerApi("GET", "/api4/custom-fields?pageSize=1000");
+    const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
     const fields = arrayKey ? data[arrayKey] : [];
     if (fields.length === 0) {
-      el.innerHTML = `<span class="small">No custom fields returned — check the console for the raw response shape.</span>`;
+      el.innerHTML = '<span class="small">No custom fields returned — check the console for the raw response shape.</span>';
       console.log("[ORESTAR] /api4/custom-fields raw response:", data);
       return;
     }
-    const rows = fields.map(f => {
+    const rows = fields.map(function(f) {
       const name = f.Name || f.name || f.Label || f.label || "(unnamed)";
       const type = f.Type || f.type || "?";
       const placement = f.Placement || f.placement || (Array.isArray(f.Placements) ? f.Placements.join(", ") : "") || "?";
       const guid = f.key || f.Key || f.id || f.Id || "?";
-      return `<tr><td>${escapeXml(name)}</td><td>${escapeXml(type)}</td><td>${escapeXml(placement)}</td><td style="font-family:ui-monospace,monospace;">${escapeXml(guid)}</td></tr>`;
+      return "<tr><td>" + escapeXml(name) + "</td><td>" + escapeXml(type) + "</td><td>" + escapeXml(placement) + "</td><td style=\"font-family:ui-monospace,monospace;\">" + escapeXml(guid) + "</td></tr>";
     }).join("");
-    el.innerHTML = `<table><thead><tr><th>Name</th><th>Type</th><th>Placement</th><th>GUID</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="small" style="margin-top:4px;">Copy the GUID for your Filer ID / Type-Subtype / Downloaded fields into the boxes below.</div>`;
+    el.innerHTML = "<table><thead><tr><th>Name</th><th>Type</th><th>Placement</th><th>GUID</th></tr></thead><tbody>" + rows + "</tbody></table>" +
+      '<div class="small" style="margin-top:4px;">Copy the GUID for your Filer ID / Type-Subtype / Downloaded fields into the boxes below.</div>';
   } catch (e) {
-    el.innerHTML = `<span class="small">Failed: ${escapeXml(e.message)}</span>`;
+    el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
   }
 });
 
-document.getElementById("testBizFormBtn").addEventListener("click", async () => {
-  if (!hasConnection()) {
-    showStatus("err", "Fill in Base URL and Access Token, and Test Connection first.");
-    return;
-  }
-  showStatus("pending", "Testing business-details-form…");
-  const results = await testBusinessDetailsForm();
-  showStatus(results.some(r => r.includes("SUCCESS")) ? "ok" : "err", results.join("\n"));
-});
-
-document.getElementById("discoverBtn").addEventListener("click", async () => {
-  if (!hasConnection()) {
-    showStatus("err", "Fill in the Base URL and Access Token above, and Test Connection first.");
-    return;
-  }
-  showStatus("pending", "Testing candidate endpoint names…");
-
-  const candidates = [
-    "/bank-or-cash-accounts", "/bank-or-cash-account",
-    "/bank-and-cash-accounts", "/bank-and-cash-account",
-    "/bankOrCashAccounts", "/bankOrCashAccount",
-    "/accounts", "/bank-accounts", "/cash-accounts",
-    "/bank-or-cash-account-list", "/chart-of-accounts",
-    "/balance-sheet-accounts"
-  ];
-
-  const results = [];
-  for (const path of candidates) {
-    try {
-      const data = await apiGet(`${path}?pageSize=1`);
-      const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-      const count = arrayKey ? data[arrayKey].length : "?";
-      results.push(`✓ ${path} — SUCCESS (found array "${arrayKey}", ${count} item(s) in this page)`);
-    } catch (e) {
-      results.push(`✗ ${path} — ${e.message}`);
-    }
-  }
-
-  showStatus(results.some(r => r.startsWith("✓")) ? "ok" : "err", results.join("\n"));
-});
-
-document.getElementById("loadAccountsBtn").addEventListener("click", async () => {
-  if (!hasConnection()) {
-    showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
-    return;
-  }
-  showStatus("pending", "Loading accounts…");
+document.getElementById("loadAccountsBtn").addEventListener("click", async function() {
+  showStatus("pending", "Loading accounts and Filer ID…");
   try {
     availableAccounts = await fetchAccounts();
     const listEl = document.getElementById("accountList");
     if (availableAccounts.length === 0) {
-      listEl.innerHTML = `<span class="small">No accounts found — either this business has none, or the account list endpoint names don't match your Manager version (check the browser console for the exact error).</span>`;
+      listEl.innerHTML = '<span class="small">No accounts found.</span>';
     } else {
-      listEl.innerHTML = availableAccounts.map((a, i) =>
-        `<label><input type="checkbox" data-acct-idx="${i}" checked> ${escapeXml(a.name)} <span class="small">(${a.kind})</span></label>`
-      ).join("");
+      listEl.innerHTML = availableAccounts.map(function(a, i) {
+        return '<label><input type="checkbox" data-acct-idx="' + i + '" checked> ' + escapeXml(a.name) + ' <span class="small">(' + a.kind + ')</span></label>';
+      }).join("");
     }
-    showStatus("ok", `Loaded ${availableAccounts.length} account(s). Uncheck any you want to exclude, then load transactions.`);
+
+    const cfFiler = document.getElementById("cfFiler").value.trim();
+    if (cfFiler) {
+      try {
+        const filerId = await fetchFilerId(cfFiler);
+        document.getElementById("resolvedFilerId").value = filerId;
+      } catch (e) {
+        document.getElementById("resolvedFilerId").value = "";
+        showStatus("err", "Accounts loaded, but Filer ID lookup failed: " + e.message);
+        return;
+      }
+    }
+    showStatus("ok", "Loaded " + availableAccounts.length + " account(s). Uncheck any you want to exclude, then load transactions.");
   } catch (err) {
-    showStatus("err", `Failed to load accounts: ${err.message}`);
+    showStatus("err", "Failed to load accounts: " + err.message);
   }
 });
 
 function selectedAccountKeys() {
   return availableAccounts
-    .filter((_, i) => {
-      const cb = document.querySelector(`input[data-acct-idx="${i}"]`);
+    .filter(function(_, i) {
+      const cb = document.querySelector('input[data-acct-idx="' + i + '"]');
       return cb ? cb.checked : true;
     })
-    .map(a => a.key);
+    .map(function(a) { return a.key; });
 }
 
-// Manager's list/detail responses don't document a single confirmed field
-// name for "which bank/cash account this transaction belongs to" — trying
-// the candidates that match the UI language ("Received in" / "Paid from")
-// plus generic fallbacks. Displayed in the review table so you can verify.
 function extractAccountRef(item, detail) {
   const candidates = [
-    detail?.ReceivedIn, detail?.PaidFrom, detail?.BankAccount, detail?.CashAccount, detail?.Account,
-    item?.ReceivedIn, item?.PaidFrom, item?.BankAccount, item?.CashAccount, item?.Account
+    detail && detail.ReceivedIn, detail && detail.PaidFrom, detail && detail.BankAccount, detail && detail.CashAccount, detail && detail.Account,
+    item && item.ReceivedIn, item && item.PaidFrom, item && item.BankAccount, item && item.CashAccount, item && item.Account
   ];
-  for (const c of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
     if (!c) continue;
     if (typeof c === "string") return { key: c, name: null };
     if (typeof c === "object" && (c.key || c.Key)) return { key: c.key || c.Key, name: c.name || c.Name || null };
@@ -440,12 +276,12 @@ function extractAccountRef(item, detail) {
   return { key: null, name: null };
 }
 
-const FETCH_PAGE_SIZE = 5000; // see note in loadCollection about pagination limits
+const FETCH_PAGE_SIZE = 5000;
 
 async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldId, downloadedFieldId, selectedKeys) {
   const results = [];
-  const listData = await apiGet(`${listPath}?pageSize=${FETCH_PAGE_SIZE}`);
-  const arrayKey = Object.keys(listData).find(k => Array.isArray(listData[k]));
+  const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
+  const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
   const items = arrayKey ? listData[arrayKey] : [];
   const possiblyTruncated = items.length >= FETCH_PAGE_SIZE;
 
@@ -453,22 +289,20 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const key = item.key || item.Key;
     let detail;
     try {
-      detail = await apiGet(`${formPath}/${key}`);
+      detail = await managerApi("GET", "/api2" + formPath + "/" + key);
     } catch (e) {
       continue;
     }
 
-    // Skip anything already marked Downloaded.
     const alreadyDownloaded = getCustomFieldValue(detail, downloadedFieldId, "checkbox") === true;
     if (alreadyDownloaded) continue;
 
-    // Skip anything not in the selected account set (if any accounts are known).
     const acctRef = extractAccountRef(item, detail);
-    if (selectedKeys.length > 0 && acctRef.key && !selectedKeys.includes(acctRef.key)) continue;
+    if (selectedKeys.length > 0 && acctRef.key && selectedKeys.indexOf(acctRef.key) === -1) continue;
 
     const tranDate = dateOnly(detail.Date || item.Date || item.date);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
-    const amount = getAmountValue(detail.Amount ?? item.Amount);
+    const amount = getAmountValue(detail.Amount != null ? detail.Amount : item.Amount);
     const contactName = detail.Payee || detail.Payer || detail.Name || item.Payee || item.Payer || item.Name || "(unnamed)";
     const description = detail.Description || item.Description || "";
 
@@ -486,32 +320,29 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 
     results.push({
       source: sourceLabel,
-      key,
-      formPath,
+      key: key,
+      formPath: formPath,
       date: tranDate,
-      enteredDate,
+      enteredDate: enteredDate,
       accountName: acctRef.name || acctRef.key || "(unknown)",
-      amount,
-      contactName,
-      typeCode,
-      subCode,
-      description,
+      amount: amount,
+      contactName: contactName,
+      typeCode: typeCode,
+      subCode: subCode,
+      description: description,
       paymentMethod: "",
       checkNo: ""
     });
   }
-  return { results, possiblyTruncated, totalFetched: items.length };
+  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
 }
 
-document.getElementById("loadBtn").addEventListener("click", async () => {
-  if (!hasConnection()) {
-    showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
-    return;
-  }
+document.getElementById("loadBtn").addEventListener("click", async function() {
   const cfTypeSubtype = document.getElementById("cfTypeSubtype").value.trim();
   const cfDownloaded = document.getElementById("cfDownloaded").value.trim();
   if (!cfTypeSubtype || !cfDownloaded) {
-    showStatus("err", "Fill in the Type-Subtype and Downloaded field GUIDs first."); return;
+    showStatus("err", "Fill in the Type-Subtype and Downloaded field GUIDs first.");
+    return;
   }
 
   showStatus("pending", "Loading not-yet-downloaded receipts and payments…");
@@ -520,10 +351,10 @@ document.getElementById("loadBtn").addEventListener("click", async () => {
 
     const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", cfTypeSubtype, cfDownloaded, selectedKeys);
     const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", cfTypeSubtype, cfDownloaded, selectedKeys);
-    loadedTransactions = [...receiptResult.results, ...paymentResult.results];
+    loadedTransactions = receiptResult.results.concat(paymentResult.results);
 
     if (loadedTransactions.length === 0) {
-      showStatus("err", `No not-yet-downloaded transactions found for the selected account(s). If you expect some, check: the Downloaded field GUID is right, the account picker matches what you expect, and (see console) whether account-matching found a field name it recognizes.`);
+      showStatus("err", "No not-yet-downloaded transactions found for the selected account(s). If you expect some, check: the Downloaded field GUID is right, and the account picker matches what you expect.");
       document.getElementById("reviewSection").style.display = "none";
       return;
     }
@@ -532,13 +363,13 @@ document.getElementById("loadBtn").addEventListener("click", async () => {
 
     if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated) {
       showStatus("err",
-        `Loaded ${loadedTransactions.length} transaction(s), but this business has ${receiptResult.totalFetched} receipt(s) and/or ${paymentResult.totalFetched} payment(s) total — right at the fetch limit (${FETCH_PAGE_SIZE}). ` +
-        `Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing.`);
+        "Loaded " + loadedTransactions.length + " transaction(s), but this business has " + receiptResult.totalFetched + " receipt(s) and/or " + paymentResult.totalFetched + " payment(s) total — right at the fetch limit (" + FETCH_PAGE_SIZE + "). " +
+        "Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing.");
     } else {
-      showStatus("ok", `Loaded ${loadedTransactions.length} not-yet-downloaded transaction(s) out of ${receiptResult.totalFetched} receipt(s) and ${paymentResult.totalFetched} payment(s) checked in total. Review below before generating XML.`);
+      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) out of " + receiptResult.totalFetched + " receipt(s) and " + paymentResult.totalFetched + " payment(s) checked in total. Review below before generating XML.");
     }
   } catch (err) {
-    showStatus("err", `Failed to load: ${err.message}`);
+    showStatus("err", "Failed to load: " + err.message);
   }
 });
 
@@ -548,43 +379,40 @@ function renderReview() {
   const tbody = document.getElementById("tranBody");
   tbody.innerHTML = "";
 
-  loadedTransactions.forEach((t, idx) => {
+  loadedTransactions.forEach(function(t, idx) {
     if (!contactsByName[t.contactName]) {
       contactsByName[t.contactName] = guessContact(t.contactName);
     }
 
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeXml(t.date)}</td>
-      <td class="small">${escapeXml(t.enteredDate || "—")}</td>
-      <td class="small">${escapeXml(t.accountName)}</td>
-      <td>${escapeXml(t.amount)}</td>
-      <td><input data-idx="${idx}" data-field="contactName" value="${escapeXml(t.contactName)}"></td>
-      <td>
-        <select data-idx="${idx}" data-field="typeCode">
-          ${Object.entries(TYPE_CODE).map(([label, code]) =>
-            `<option value="${code}" ${code === t.typeCode ? "selected" : ""}>${label} (${code})</option>`).join("")}
-        </select>
-      </td>
-      <td>
-        <select data-idx="${idx}" data-field="subCode"></select>
-      </td>
-      <td><input data-idx="${idx}" data-field="description" value="${escapeXml(t.description)}"></td>
-      <td>
-        <select data-idx="${idx}" data-field="paymentMethod">
-          ${PAYMENT_METHODS.map(([code,label]) =>
-            `<option value="${code}" ${code === t.paymentMethod ? "selected" : ""}>${label}</option>`).join("")}
-        </select>
-      </td>
-      <td><input data-idx="${idx}" data-field="checkNo" value="${escapeXml(t.checkNo)}"></td>
-      <td class="small">${t.source}</td>
-    `;
+    tr.innerHTML =
+      "<td>" + escapeXml(t.date) + "</td>" +
+      '<td class="small">' + escapeXml(t.enteredDate || "—") + "</td>" +
+      '<td class="small">' + escapeXml(t.accountName) + "</td>" +
+      "<td>" + escapeXml(t.amount) + "</td>" +
+      '<td><input data-idx="' + idx + '" data-field="contactName" value="' + escapeXml(t.contactName) + '"></td>' +
+      "<td><select data-idx=\"" + idx + "\" data-field=\"typeCode\">" +
+        Object.entries(TYPE_CODE).map(function(entry) {
+          const label = entry[0], code = entry[1];
+          return '<option value="' + code + '" ' + (code === t.typeCode ? "selected" : "") + ">" + label + " (" + code + ")</option>";
+        }).join("") +
+      "</select></td>" +
+      "<td><select data-idx=\"" + idx + "\" data-field=\"subCode\"></select></td>" +
+      '<td><input data-idx="' + idx + '" data-field="description" value="' + escapeXml(t.description) + '"></td>' +
+      "<td><select data-idx=\"" + idx + "\" data-field=\"paymentMethod\">" +
+        PAYMENT_METHODS.map(function(entry) {
+          const code = entry[0], label = entry[1];
+          return '<option value="' + code + '" ' + (code === t.paymentMethod ? "selected" : "") + ">" + label + "</option>";
+        }).join("") +
+      "</select></td>" +
+      '<td><input data-idx="' + idx + '" data-field="checkNo" value="' + escapeXml(t.checkNo) + '"></td>' +
+      '<td class="small">' + t.source + "</td>";
     tbody.appendChild(tr);
     populateSubtypeSelect(idx);
   });
 
-  tbody.querySelectorAll("input, select").forEach(el => {
-    el.addEventListener("change", (e) => {
+  tbody.querySelectorAll("input, select").forEach(function(el) {
+    el.addEventListener("change", function(e) {
       const idx = Number(e.target.dataset.idx);
       const field = e.target.dataset.field;
       loadedTransactions[idx][field] = e.target.value;
@@ -601,11 +429,13 @@ function renderReview() {
 
 function populateSubtypeSelect(idx) {
   const t = loadedTransactions[idx];
-  const select = document.querySelector(`select[data-idx="${idx}"][data-field="subCode"]`);
+  const select = document.querySelector('select[data-idx="' + idx + '"][data-field="subCode"]');
   const options = SUBTYPE_OPTIONS[t.typeCode] || [];
-  select.innerHTML = options.map(([code, label]) =>
-    `<option value="${code}" ${code === t.subCode ? "selected" : ""}>${label} (${code})</option>`).join("");
-  if (!options.some(([code]) => code === t.subCode)) {
+  select.innerHTML = options.map(function(entry) {
+    const code = entry[0], label = entry[1];
+    return '<option value="' + code + '" ' + (code === t.subCode ? "selected" : "") + ">" + label + " (" + code + ")</option>";
+  }).join("");
+  if (!options.some(function(entry) { return entry[0] === t.subCode; })) {
     t.subCode = options[0] ? options[0][0] : "";
     select.value = t.subCode;
   }
@@ -628,49 +458,48 @@ function guessContact(name) {
 function renderContacts() {
   const container = document.getElementById("contactsList");
   container.innerHTML = "";
-  Object.keys(contactsByName).forEach(name => {
+  Object.keys(contactsByName).forEach(function(name) {
     const c = contactsByName[name];
     const card = document.createElement("div");
     card.className = "contact-card";
-    card.innerHTML = `
-      <h4>${escapeXml(name)}</h4>
-      <div class="row">
-        <div>
-          <label>Contact Type</label>
-          <select data-name="${escapeXml(name)}" data-field="type">
-            ${CONTACT_TYPES.map(([code,label]) => `<option value="${code}" ${code===c.type?"selected":""}>${label} (${code})</option>`).join("")}
-          </select>
-        </div>
-        <div class="cn-individual" style="display:${c.type==='I'||c.type==='F' ? 'flex':'none'}; gap:10px; flex:2;">
-          <div><label>First</label><input data-name="${escapeXml(name)}" data-field="first" value="${escapeXml(c.first)}"></div>
-          <div><label>Last</label><input data-name="${escapeXml(name)}" data-field="last" value="${escapeXml(c.last)}"></div>
-        </div>
-        <div class="cn-business" style="display:${c.type==='B'||c.type==='L'||c.type==='O' ? 'block':'none'}; flex:2;">
-          <label>Business / Org Name</label><input data-name="${escapeXml(name)}" data-field="business" value="${escapeXml(c.business)}">
-        </div>
-        <div class="cn-committee" style="display:${c.type==='C'||c.type==='P' ? 'block':'none'}; flex:2;">
-          <label>Committee Name</label><input data-name="${escapeXml(name)}" data-field="committeeName" value="${escapeXml(c.committeeName)}">
-        </div>
-      </div>
-      <div class="small" style="margin:6px 0 4px;">Optional — fill in if this contact's yearly total exceeds $100:</div>
-      <div class="row">
-        <div><label>Street</label><input data-name="${escapeXml(name)}" data-field="street1" value="${escapeXml(c.street1)}"></div>
-        <div><label>City</label><input data-name="${escapeXml(name)}" data-field="city" value="${escapeXml(c.city)}"></div>
-        <div><label>State</label><input data-name="${escapeXml(name)}" data-field="state" maxlength="2" value="${escapeXml(c.state)}"></div>
-        <div><label>Zip</label><input data-name="${escapeXml(name)}" data-field="zip" value="${escapeXml(c.zip)}"></div>
-      </div>
-      <div class="row" style="display:${c.type==='I'||c.type==='F' ? 'flex':'none'}">
-        <div><label>Occupation</label><input data-name="${escapeXml(name)}" data-field="occupation" value="${escapeXml(c.occupation)}"></div>
-        <div><label>Employer</label><input data-name="${escapeXml(name)}" data-field="employerName" value="${escapeXml(c.employerName)}"></div>
-        <div><label>Employer City</label><input data-name="${escapeXml(name)}" data-field="employerCity" value="${escapeXml(c.employerCity)}"></div>
-        <div><label>Employer State</label><input data-name="${escapeXml(name)}" data-field="employerState" maxlength="2" value="${escapeXml(c.employerState)}"></div>
-      </div>
-    `;
+    card.innerHTML =
+      "<h4>" + escapeXml(name) + "</h4>" +
+      '<div class="row">' +
+        "<div><label>Contact Type</label><select data-name=\"" + escapeXml(name) + "\" data-field=\"type\">" +
+          CONTACT_TYPES.map(function(entry) {
+            const code = entry[0], label = entry[1];
+            return '<option value="' + code + '" ' + (code === c.type ? "selected" : "") + ">" + label + " (" + code + ")</option>";
+          }).join("") +
+        "</select></div>" +
+        '<div class="cn-individual" style="display:' + (c.type === "I" || c.type === "F" ? "flex" : "none") + '; gap:10px; flex:2;">' +
+          '<div><label>First</label><input data-name="' + escapeXml(name) + '" data-field="first" value="' + escapeXml(c.first) + '"></div>' +
+          '<div><label>Last</label><input data-name="' + escapeXml(name) + '" data-field="last" value="' + escapeXml(c.last) + '"></div>' +
+        "</div>" +
+        '<div class="cn-business" style="display:' + (c.type === "B" || c.type === "L" || c.type === "O" ? "block" : "none") + '; flex:2;">' +
+          '<label>Business / Org Name</label><input data-name="' + escapeXml(name) + '" data-field="business" value="' + escapeXml(c.business) + '">' +
+        "</div>" +
+        '<div class="cn-committee" style="display:' + (c.type === "C" || c.type === "P" ? "block" : "none") + '; flex:2;">' +
+          '<label>Committee Name</label><input data-name="' + escapeXml(name) + '" data-field="committeeName" value="' + escapeXml(c.committeeName) + '">' +
+        "</div>" +
+      "</div>" +
+      '<div class="small" style="margin:6px 0 4px;">Optional — fill in if this contact\'s yearly total exceeds $100:</div>' +
+      '<div class="row">' +
+        '<div><label>Street</label><input data-name="' + escapeXml(name) + '" data-field="street1" value="' + escapeXml(c.street1) + '"></div>' +
+        '<div><label>City</label><input data-name="' + escapeXml(name) + '" data-field="city" value="' + escapeXml(c.city) + '"></div>' +
+        '<div><label>State</label><input data-name="' + escapeXml(name) + '" data-field="state" maxlength="2" value="' + escapeXml(c.state) + '"></div>' +
+        '<div><label>Zip</label><input data-name="' + escapeXml(name) + '" data-field="zip" value="' + escapeXml(c.zip) + '"></div>' +
+      "</div>" +
+      '<div class="row" style="display:' + (c.type === "I" || c.type === "F" ? "flex" : "none") + '">' +
+        '<div><label>Occupation</label><input data-name="' + escapeXml(name) + '" data-field="occupation" value="' + escapeXml(c.occupation) + '"></div>' +
+        '<div><label>Employer</label><input data-name="' + escapeXml(name) + '" data-field="employerName" value="' + escapeXml(c.employerName) + '"></div>' +
+        '<div><label>Employer City</label><input data-name="' + escapeXml(name) + '" data-field="employerCity" value="' + escapeXml(c.employerCity) + '"></div>' +
+        '<div><label>Employer State</label><input data-name="' + escapeXml(name) + '" data-field="employerState" maxlength="2" value="' + escapeXml(c.employerState) + '"></div>' +
+      "</div>";
     container.appendChild(card);
   });
 
-  container.querySelectorAll("input, select").forEach(el => {
-    el.addEventListener("change", (e) => {
+  container.querySelectorAll("input, select").forEach(function(el) {
+    el.addEventListener("change", function(e) {
       const name = e.target.dataset.name;
       const field = e.target.dataset.field;
       contactsByName[name][field] = e.target.value;
@@ -682,63 +511,63 @@ function renderContacts() {
 function buildContactXml(id, c) {
   let nameXml;
   if (c.type === "I" || c.type === "F") {
-    nameXml = `<individual-name><first>${escapeXml(c.first)}</first><last>${escapeXml(c.last)}</last></individual-name>`;
+    nameXml = "<individual-name><first>" + escapeXml(c.first) + "</first><last>" + escapeXml(c.last) + "</last></individual-name>";
   } else if (c.type === "C" || c.type === "P") {
-    nameXml = `<committee><name>${escapeXml(c.committeeName)}</name></committee>`;
+    nameXml = "<committee><name>" + escapeXml(c.committeeName) + "</name></committee>";
   } else {
-    nameXml = `<business-name>${escapeXml(c.business)}</business-name>`;
+    nameXml = "<business-name>" + escapeXml(c.business) + "</business-name>";
   }
 
   let addressXml = "";
   if (c.street1 || c.city || c.state || c.zip) {
-    addressXml = `<address>` +
-      (c.street1 ? `<street1>${escapeXml(c.street1)}</street1>` : "") +
-      (c.city ? `<city>${escapeXml(c.city)}</city>` : "") +
-      (c.state ? `<state>${escapeXml(c.state)}</state>` : "") +
-      (c.zip ? `<zip>${escapeXml(c.zip)}</zip>` : "") +
-      (c.county ? `<county>${escapeXml(c.county)}</county>` : "") +
-      `</address>`;
+    addressXml = "<address>" +
+      (c.street1 ? "<street1>" + escapeXml(c.street1) + "</street1>" : "") +
+      (c.city ? "<city>" + escapeXml(c.city) + "</city>" : "") +
+      (c.state ? "<state>" + escapeXml(c.state) + "</state>" : "") +
+      (c.zip ? "<zip>" + escapeXml(c.zip) + "</zip>" : "") +
+      (c.county ? "<county>" + escapeXml(c.county) + "</county>" : "") +
+      "</address>";
   }
 
   let employmentXml = "";
   if (c.employerName) {
-    employmentXml = `<employment><employer-name>${escapeXml(c.employerName)}</employer-name>` +
-      (c.employerCity ? `<city>${escapeXml(c.employerCity)}</city>` : "") +
-      (c.employerState ? `<state>${escapeXml(c.employerState)}</state>` : "") +
-      `</employment>`;
+    employmentXml = "<employment><employer-name>" + escapeXml(c.employerName) + "</employer-name>" +
+      (c.employerCity ? "<city>" + escapeXml(c.employerCity) + "</city>" : "") +
+      (c.employerState ? "<state>" + escapeXml(c.employerState) + "</state>" : "") +
+      "</employment>";
   }
 
-  return `<contact id="${escapeXml(id)}">` +
-    `<type>${c.type}</type>` +
-    `<contact-name>${nameXml}</contact-name>` +
+  return "<contact id=\"" + escapeXml(id) + "\">" +
+    "<type>" + c.type + "</type>" +
+    "<contact-name>" + nameXml + "</contact-name>" +
     addressXml +
-    (c.occupation ? `<occupation>${escapeXml(c.occupation)}</occupation>` : "") +
+    (c.occupation ? "<occupation>" + escapeXml(c.occupation) + "</occupation>" : "") +
     employmentXml +
-    `</contact>`;
+    "</contact>";
 }
 
 function buildTransactionXml(id, contactId, t) {
-  return `<transaction id="${escapeXml(id)}">` +
-    `<operation><add>true</add></operation>` +
-    `<contact-id>${escapeXml(contactId)}</contact-id>` +
-    `<type>${t.typeCode}</type>` +
-    `<sub-type>${t.subCode}</sub-type>` +
-    (t.description ? `<description>${escapeXml(t.description.slice(0,200))}</description>` : "") +
-    `<amount>${t.amount}</amount>` +
-    (t.paymentMethod ? `<payment-method>${t.paymentMethod}</payment-method>` : "") +
-    `<date>${t.date}</date>` +
-    (t.checkNo ? `<check-no>${escapeXml(t.checkNo)}</check-no>` : "") +
-    `</transaction>`;
+  return "<transaction id=\"" + escapeXml(id) + "\">" +
+    "<operation><add>true</add></operation>" +
+    "<contact-id>" + escapeXml(contactId) + "</contact-id>" +
+    "<type>" + t.typeCode + "</type>" +
+    "<sub-type>" + t.subCode + "</sub-type>" +
+    (t.description ? "<description>" + escapeXml(t.description.slice(0,200)) + "</description>" : "") +
+    "<amount>" + t.amount + "</amount>" +
+    (t.paymentMethod ? "<payment-method>" + t.paymentMethod + "</payment-method>" : "") +
+    "<date>" + t.date + "</date>" +
+    (t.checkNo ? "<check-no>" + escapeXml(t.checkNo) + "</check-no>" : "") +
+    "</transaction>";
 }
 
 let lastGeneratedFilerId = "";
 
-document.getElementById("generateBtn").addEventListener("click", () => {
-  const filerId = document.getElementById("filerId").value.trim();
-  if (!filerId) { showStatus("err", "Enter your Filer ID above first."); return; }
-  if (!/^\d+$/.test(filerId)) { showStatus("err", `Filer ID "${filerId}" isn't a plain positive integer — ORESTAR requires filer-id to be numeric.`); return; }
-  if (loadedTransactions.some(t => !t.typeCode || !t.subCode)) {
-    showStatus("err", "Every transaction needs a Type and Sub-type — check the table above."); return;
+document.getElementById("generateBtn").addEventListener("click", function() {
+  const filerId = document.getElementById("resolvedFilerId").value.trim();
+  if (!filerId) { showStatus("err", "Filer ID hasn't resolved yet — click \"Load Accounts & Filer ID\" above and check for errors."); return; }
+  if (loadedTransactions.some(function(t) { return !t.typeCode || !t.subCode; })) {
+    showStatus("err", "Every transaction needs a Type and Sub-type — check the table above.");
+    return;
   }
   lastGeneratedFilerId = filerId;
 
@@ -746,36 +575,38 @@ document.getElementById("generateBtn").addEventListener("click", () => {
   const contactIdByName = {};
   let contactCounter = 1;
   const contactXmlParts = [];
-  Object.entries(contactsByName).forEach(([name, c]) => {
-    const isUsed = loadedTransactions.some(t => t.contactName === name);
+  Object.entries(contactsByName).forEach(function(entry) {
+    const name = entry[0], c = entry[1];
+    const isUsed = loadedTransactions.some(function(t) { return t.contactName === name; });
     if (!isUsed) return;
-    const id = `C${stamp}-${contactCounter++}`;
+    const id = "C" + stamp + "-" + (contactCounter++);
     contactIdByName[name] = id;
     contactXmlParts.push(buildContactXml(id, c));
   });
 
-  const tranXmlParts = loadedTransactions.map((t, i) =>
-    buildTransactionXml(`T${stamp}-${i+1}`, contactIdByName[t.contactName], t));
+  const tranXmlParts = loadedTransactions.map(function(t, i) {
+    return buildTransactionXml("T" + stamp + "-" + (i + 1), contactIdByName[t.contactName], t);
+  });
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<campaign-finance-transactions xmlns="http://www.state.or.us/sos/ebs2/ce/dataobject" ` +
-    `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
-    `xsi:schemaLocation="http://www.state.or.us/sos/ebs2/ce/dataobject" ` +
-    `filer-id="${escapeXml(filerId)}">\n` +
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<campaign-finance-transactions xmlns="http://www.state.or.us/sos/ebs2/ce/dataobject" ' +
+    'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+    'xsi:schemaLocation="http://www.state.or.us/sos/ebs2/ce/dataobject" ' +
+    'filer-id="' + escapeXml(filerId) + '">\n' +
     contactXmlParts.join("\n") + "\n" +
     tranXmlParts.join("\n") + "\n" +
-    `</campaign-finance-transactions>`;
+    "</campaign-finance-transactions>";
 
   const output = document.getElementById("xmlOutput");
   output.style.display = "block";
   output.value = xml;
   document.getElementById("downloadBtn").disabled = false;
-  document.getElementById("downloadBtn").onclick = () => {
+  document.getElementById("downloadBtn").onclick = function() {
     const blob = new Blob([xml], { type: "application/xml" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `orestar-export-${new Date().toISOString().slice(0,10)}.xml`;
+    a.download = "orestar-export-" + new Date().toISOString().slice(0,10) + ".xml";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -784,32 +615,32 @@ document.getElementById("generateBtn").addEventListener("click", () => {
   showStatus("ok", "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once you've confirmed the upload, click \"Mark These as Downloaded\" so they're excluded from your next export.");
 });
 
-document.getElementById("markDownloadedBtn").addEventListener("click", async () => {
+document.getElementById("markDownloadedBtn").addEventListener("click", async function() {
   const cfDownloaded = document.getElementById("cfDownloaded").value.trim();
   if (!cfDownloaded) { showMarkStatus("err", "Downloaded field GUID is missing."); return; }
 
   document.getElementById("markDownloadedBtn").disabled = true;
-  showMarkStatus("pending", `Marking ${loadedTransactions.length} transaction(s) as downloaded…`);
+  showMarkStatus("pending", "Marking " + loadedTransactions.length + " transaction(s) as downloaded…");
 
   let succeeded = 0;
   const failures = [];
   for (const t of loadedTransactions) {
     try {
-      await apiUpdate(`${t.formPath}/${t.key}`, {
-        CustomFields2: { Checkboxes: { [cfDownloaded]: true } }
-      });
+      const body = { CustomFields2: { Checkboxes: {} } };
+      body.CustomFields2.Checkboxes[cfDownloaded] = true;
+      await managerApi("PUT", "/api2" + t.formPath + "/" + t.key, body);
       succeeded++;
     } catch (e) {
-      failures.push(`${t.source} ${t.key}: ${e.message}`);
+      failures.push(t.source + " " + t.key + ": " + e.message);
     }
   }
 
   if (failures.length === 0) {
-    showMarkStatus("ok", `Marked all ${succeeded} transaction(s) as downloaded. They won't appear in your next export.`);
+    showMarkStatus("ok", "Marked all " + succeeded + " transaction(s) as downloaded. They won't appear in your next export.");
   } else {
     showMarkStatus("err",
-      `Marked ${succeeded} of ${loadedTransactions.length}. ${failures.length} failed — these will show up again next time and need to be marked manually or retried:\n` +
-      failures.slice(0, 10).join("\n") + (failures.length > 10 ? `\n…and ${failures.length - 10} more` : ""));
+      "Marked " + succeeded + " of " + loadedTransactions.length + ". " + failures.length + " failed — these will show up again next time and need to be marked manually or retried:\n" +
+      failures.slice(0, 10).join("\n") + (failures.length > 10 ? "\n…and " + (failures.length - 10) + " more" : ""));
     document.getElementById("markDownloadedBtn").disabled = false;
   }
 });
