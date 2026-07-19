@@ -83,8 +83,9 @@ function loadStoredConfig() {
 function saveConfig() {
   const cfg = {
     cfFiler: document.getElementById("cfFiler").value.trim(),
-    cfTypeSubtype: document.getElementById("cfTypeSubtype").value.trim(),
-    cfDownloaded: document.getElementById("cfDownloaded").value.trim()
+    cfTypeSubtypeReceipt: document.getElementById("cfTypeSubtypeReceipt").value.trim(),
+    cfTypeSubtypePayment: document.getElementById("cfTypeSubtypePayment").value.trim(),
+    cfTransactionId: document.getElementById("cfTransactionId").value.trim()
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
@@ -96,10 +97,11 @@ function saveConfig() {
   const cfg = loadStoredConfig();
   const fileConfig = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
   document.getElementById("cfFiler").value = cfg.cfFiler || fileConfig.FILER_ID_FIELD_GUID || "";
-  document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype || fileConfig.TYPE_SUBTYPE_FIELD_GUID || "";
-  document.getElementById("cfDownloaded").value = cfg.cfDownloaded || fileConfig.DOWNLOADED_FIELD_GUID || "";
+  document.getElementById("cfTypeSubtypeReceipt").value = cfg.cfTypeSubtypeReceipt || fileConfig.TYPE_SUBTYPE_FIELD_GUID_RECEIPT || "";
+  document.getElementById("cfTypeSubtypePayment").value = cfg.cfTypeSubtypePayment || fileConfig.TYPE_SUBTYPE_FIELD_GUID_PAYMENT || "";
+  document.getElementById("cfTransactionId").value = cfg.cfTransactionId || fileConfig.TRANSACTION_ID_FIELD_GUID || "";
 })();
-["cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(function(id) {
+["cfFiler", "cfTypeSubtypeReceipt", "cfTypeSubtypePayment", "cfTransactionId"].forEach(function(id) {
   document.getElementById(id).addEventListener("change", saveConfig);
 });
 
@@ -109,7 +111,7 @@ document.getElementById("forgetBtn").addEventListener("click", function() {
   } catch (e) {
     console.warn("Could not clear localStorage:", e.message);
   }
-  ["cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(function(id) {
+  ["cfFiler", "cfTypeSubtypeReceipt", "cfTypeSubtypePayment", "cfTransactionId"].forEach(function(id) {
     document.getElementById(id).value = "";
   });
   showStatus("ok", "Saved field GUIDs cleared from this browser.");
@@ -300,7 +302,10 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       continue;
     }
 
-    const alreadyDownloaded = getCustomFieldValue(detail, downloadedFieldId, "checkbox") === true;
+    // Transaction ID field: empty/null means not yet exported (include it);
+    // any value (this business already exported it) means exclude it.
+    const txnIdValue = getCustomFieldValue(detail, downloadedFieldId, "number");
+    const alreadyDownloaded = txnIdValue !== undefined && txnIdValue !== null && txnIdValue !== "";
     if (alreadyDownloaded) continue;
 
     const acctRef = extractAccountRef(item, detail);
@@ -344,23 +349,24 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 }
 
 document.getElementById("loadBtn").addEventListener("click", async function() {
-  const cfTypeSubtype = document.getElementById("cfTypeSubtype").value.trim();
-  const cfDownloaded = document.getElementById("cfDownloaded").value.trim();
-  if (!cfTypeSubtype || !cfDownloaded) {
-    showStatus("err", "Fill in the Type-Subtype and Downloaded field GUIDs first.");
+  const cfTypeSubtypeReceipt = document.getElementById("cfTypeSubtypeReceipt").value.trim();
+  const cfTypeSubtypePayment = document.getElementById("cfTypeSubtypePayment").value.trim();
+  const cfTransactionId = document.getElementById("cfTransactionId").value.trim();
+  if (!cfTypeSubtypeReceipt || !cfTypeSubtypePayment || !cfTransactionId) {
+    showStatus("err", "Fill in both Type-Subtype field GUIDs and the Transaction ID field GUID first.");
     return;
   }
 
-  showStatus("pending", "Loading not-yet-downloaded receipts and payments…");
+  showStatus("pending", "Loading not-yet-exported receipts and payments…");
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", cfTypeSubtype, cfDownloaded, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", cfTypeSubtype, cfDownloaded, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", cfTypeSubtypeReceipt, cfTransactionId, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", cfTypeSubtypePayment, cfTransactionId, selectedKeys);
     loadedTransactions = receiptResult.results.concat(paymentResult.results);
 
     if (loadedTransactions.length === 0) {
-      showStatus("err", "No not-yet-downloaded transactions found for the selected account(s). If you expect some, check: the Downloaded field GUID is right, and the account picker matches what you expect.");
+      showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check: the Transaction ID field GUID is right, and the account picker matches what you expect.");
       document.getElementById("reviewSection").style.display = "none";
       return;
     }
@@ -381,7 +387,7 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 
 function renderReview() {
   document.getElementById("reviewSection").style.display = "block";
-  document.getElementById("markDownloadedBtn").disabled = true;
+  document.getElementById("txnIdSection").style.display = "none";
   const tbody = document.getElementById("tranBody");
   tbody.innerHTML = "";
 
@@ -616,37 +622,77 @@ document.getElementById("generateBtn").addEventListener("click", function() {
     a.click();
     URL.revokeObjectURL(url);
   };
-  document.getElementById("markDownloadedBtn").disabled = false;
-  showMarkStatus("", "");
-  showStatus("ok", "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once you've confirmed the upload, click \"Mark These as Downloaded\" so they're excluded from your next export.");
+  renderTxnIdTable();
+  document.getElementById("txnIdSection").style.display = "block";
+  showStatus("ok", "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save.");
 });
 
-document.getElementById("markDownloadedBtn").addEventListener("click", async function() {
-  const cfDownloaded = document.getElementById("cfDownloaded").value.trim();
-  if (!cfDownloaded) { showMarkStatus("err", "Downloaded field GUID is missing."); return; }
+function renderTxnIdTable() {
+  const tbody = document.getElementById("txnIdBody");
+  tbody.innerHTML = "";
+  loadedTransactions.forEach(function(t, idx) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + escapeXml(t.date) + "</td>" +
+      "<td>" + escapeXml(t.contactName) + "</td>" +
+      "<td>" + escapeXml(t.amount) + "</td>" +
+      "<td>" + escapeXml(t.typeCode) + (t.subCode ? "/" + escapeXml(t.subCode) : "") + "</td>" +
+      '<td><input data-idx="' + idx + '" data-field="orestarTxnId" placeholder="numeric ID from ORESTAR"></td>';
+    tbody.appendChild(tr);
+  });
+}
 
-  document.getElementById("markDownloadedBtn").disabled = true;
-  showMarkStatus("pending", "Marking " + loadedTransactions.length + " transaction(s) as downloaded…");
+document.getElementById("saveTxnIdsBtn").addEventListener("click", async function() {
+  const cfTransactionId = document.getElementById("cfTransactionId").value.trim();
+  if (!cfTransactionId) { showMarkStatus("err", "Transaction ID field GUID is missing (Custom Fields section above)."); return; }
+
+  const rows = document.querySelectorAll('#txnIdBody input[data-field="orestarTxnId"]');
+  const entries = []; // { idx, value }
+  let hasInvalid = false;
+  rows.forEach(function(input) {
+    const raw = input.value.trim();
+    if (raw === "") return; // blank rows are skipped entirely, nothing written
+    if (!/^\d+$/.test(raw)) {
+      hasInvalid = true;
+      input.style.borderColor = "#c0392b";
+      return;
+    }
+    input.style.borderColor = "";
+    entries.push({ idx: Number(input.dataset.idx), value: raw });
+  });
+
+  if (hasInvalid) {
+    showMarkStatus("err", "One or more Transaction IDs isn't a plain number (highlighted in red) — ORESTAR Transaction IDs and this field are numeric. Fix those and try again.");
+    return;
+  }
+  if (entries.length === 0) {
+    showMarkStatus("err", "No Transaction IDs entered — fill in at least one row before saving.");
+    return;
+  }
+
+  document.getElementById("saveTxnIdsBtn").disabled = true;
+  showMarkStatus("pending", "Saving " + entries.length + " Transaction ID(s) to Manager…");
 
   let succeeded = 0;
   const failures = [];
-  for (const t of loadedTransactions) {
+  for (const entry of entries) {
+    const t = loadedTransactions[entry.idx];
     try {
-      const body = { CustomFields2: { Checkboxes: {} } };
-      body.CustomFields2.Checkboxes[cfDownloaded] = true;
+      const body = { CustomFields2: { Decimals: {} } };
+      body.CustomFields2.Decimals[cfTransactionId] = Number(entry.value);
       await managerApi("PUT", "/api2" + t.formPath + "/" + t.key, body);
       succeeded++;
     } catch (e) {
-      failures.push(t.source + " " + t.key + ": " + e.message);
+      failures.push(t.source + " " + t.key + " (entered ID " + entry.value + "): " + e.message);
     }
   }
 
+  document.getElementById("saveTxnIdsBtn").disabled = false;
   if (failures.length === 0) {
-    showMarkStatus("ok", "Marked all " + succeeded + " transaction(s) as downloaded. They won't appear in your next export.");
+    showMarkStatus("ok", "Saved " + succeeded + " Transaction ID(s). Those transactions won't appear in your next export.");
   } else {
     showMarkStatus("err",
-      "Marked " + succeeded + " of " + loadedTransactions.length + ". " + failures.length + " failed — these will show up again next time and need to be marked manually or retried:\n" +
+      "Saved " + succeeded + " of " + entries.length + ". " + failures.length + " failed — retry these:\n" +
       failures.slice(0, 10).join("\n") + (failures.length > 10 ? "\n…and " + (failures.length - 10) + " more" : ""));
-    document.getElementById("markDownloadedBtn").disabled = false;
   }
 });

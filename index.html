@@ -88,16 +88,22 @@ This runs as a Manager Custom Button — embedded inside Manager, talking to it 
       <input type="text" id="cfFiler" placeholder="custom field GUID">
     </div>
     <div>
-      <label for="cfTypeSubtype">"Type - Subtype" field GUID
-        <span class="hint">The shared field placed on both Receipts and Payments.</span>
+      <label for="cfTypeSubtypeReceipt">"Type - Subtype" field GUID (Receipts)
+        <span class="hint">Separate field from the Payments one below, even though it has the same name.</span>
       </label>
-      <input type="text" id="cfTypeSubtype" placeholder="custom field GUID">
+      <input type="text" id="cfTypeSubtypeReceipt" placeholder="custom field GUID">
     </div>
     <div>
-      <label for="cfDownloaded">"Downloaded" field GUID
-        <span class="hint">Checkbox-type field placed on both Receipts and Payments, used to track what's already been exported.</span>
+      <label for="cfTypeSubtypePayment">"Type - Subtype" field GUID (Payments)
+        <span class="hint">Separate field from the Receipts one above, even though it has the same name.</span>
       </label>
-      <input type="text" id="cfDownloaded" placeholder="custom field GUID">
+      <input type="text" id="cfTypeSubtypePayment" placeholder="custom field GUID">
+    </div>
+    <div>
+      <label for="cfTransactionId">Transaction ID field GUID
+        <span class="hint">Number-type field (same style as Filer ID). Empty = not yet exported; any value = already exported. On both Receipts and Payments.</span>
+      </label>
+      <input type="text" id="cfTransactionId" placeholder="custom field GUID">
     </div>
   </div>
 
@@ -142,11 +148,22 @@ This runs as a Manager Custom Button — embedded inside Manager, talking to it 
   <button id="downloadBtn" type="button" class="secondary" disabled>Download XML</button>
   <textarea id="xmlOutput" rows="14" readonly style="margin-top:10px; display:none;"></textarea>
 
-  <div style="margin-top:10px;">
-    <button id="markDownloadedBtn" type="button" class="danger-ok" disabled>Mark These as Downloaded in Manager</button>
-    <div class="small">Do this only after you've actually saved/uploaded the file — it's what keeps these transactions out of your next export.</div>
+  <div id="txnIdSection" style="display:none; margin-top:16px;">
+    <h3>4. Enter ORESTAR Transaction IDs</h3>
+    <div class="small">
+      After you upload the XML to ORESTAR, it assigns a Transaction ID to each transaction. Type each one in below once you have them,
+      then save — this writes them into the Transaction ID field in Manager, which is what keeps these transactions out of your next export.
+      Leave any blank if you don't have that one yet; nothing gets written for a blank row.
+    </div>
+    <table id="txnIdTable">
+      <thead>
+        <tr><th>Date</th><th>Contact Name</th><th>Amount</th><th>Type</th><th>ORESTAR Transaction ID</th></tr>
+      </thead>
+      <tbody id="txnIdBody"></tbody>
+    </table>
+    <button id="saveTxnIdsBtn" type="button" class="danger-ok">Save Transaction IDs to Manager</button>
+    <div id="markStatus"></div>
   </div>
-  <div id="markStatus"></div>
 </div>
 
 <script src="config.js"></script>

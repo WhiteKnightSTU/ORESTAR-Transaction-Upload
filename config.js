@@ -15,10 +15,13 @@ const ORESTAR_CONFIG = {
   // Number-type field on Business Details holding your ORESTAR committee ID.
   FILER_ID_FIELD_GUID: "f09e9200-6cf1-497b-8a42-cf372600f82e",
 
-  // Text-type field titled "Type - Subtype", placed on both Receipts and Payments.
-  TYPE_SUBTYPE_FIELD_GUID: "",
+  // "Type - Subtype" is actually TWO separate custom fields with the same
+  // name — one placed on Receipts, one placed on Payments. Different GUIDs.
+  TYPE_SUBTYPE_FIELD_GUID_RECEIPT: "",
+  TYPE_SUBTYPE_FIELD_GUID_PAYMENT: "",
 
-  // Checkbox-type field placed on both Receipts and Payments, tracking what's
-  // already been exported.
-  DOWNLOADED_FIELD_GUID: ""
+  // Number-type field (same style as PAC ID #) storing a Transaction ID.
+  // Empty/null = not yet exported (include it). Has any value = already
+  // exported (exclude it). Placed on both Receipts and Payments.
+  TRANSACTION_ID_FIELD_GUID: ""
 };
