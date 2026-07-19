@@ -182,6 +182,14 @@ async function apiGetV4(path) {
 // /api4/businesses lists what this token can access; if there's exactly one,
 // we use it directly rather than requiring manual entry at all.
 async function detectBusinessName() {
+  // Prefer /api2, since it's been reliably reachable this whole time, unlike
+  // /api4 which has had repeated connectivity issues on this setup.
+  try {
+    return await fetchBusinessNameFromApi2();
+  } catch (e) {
+    console.warn("[ORESTAR] api2-based business name lookup failed, trying /api4/businesses:", e.message);
+  }
+
   const res = await fetch(`${getBaseUrlV4()}/businesses`, {
     headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
   });
@@ -317,7 +325,12 @@ const BUSINESS_DETAILS_CANDIDATES = [
   "/settings/business-details"
 ];
 
-async function fetchFilerId(filerFieldId) {
+let cachedBusinessDetail = null;
+let cachedBusinessDetailPath = null;
+
+async function fetchBusinessDetailsRecord() {
+  if (cachedBusinessDetail) return { detail: cachedBusinessDetail, workingPath: cachedBusinessDetailPath };
+
   let detail = null;
   let workingPath = null;
   const attempts = [];
@@ -338,12 +351,28 @@ async function fetchFilerId(filerFieldId) {
     throw new Error(`Could not find the Business Details endpoint. Results:\n${attempts.join("\n")}\nA 401 means that path exists but auth was rejected for it specifically (worth checking separately from plain 404s) — check the Network tab response body on that one for more detail.`);
   }
   console.log(`[ORESTAR] Business Details found at: ${workingPath}`);
+  cachedBusinessDetail = detail;
+  cachedBusinessDetailPath = workingPath;
+  return { detail, workingPath };
+}
+
+async function fetchFilerId(filerFieldId) {
+  const { detail, workingPath } = await fetchBusinessDetailsRecord();
 
   const raw = getCustomFieldValue(detail, filerFieldId, "number");
   if (raw == null || raw === "") throw new Error(`Filer ID field came back empty from ${workingPath} — check the GUID and that the field actually has a value set in Business Details.`);
   const cleaned = String(raw).trim();
   if (!/^\d+$/.test(cleaned)) throw new Error(`Filer ID value "${cleaned}" isn't a plain positive integer — ORESTAR requires filer-id to be numeric.`);
   return cleaned;
+}
+
+// Business name, derived from the same reliably-reachable /api2 Business
+// Details record instead of the flaky /api4/businesses call.
+async function fetchBusinessNameFromApi2() {
+  const { detail } = await fetchBusinessDetailsRecord();
+  const name = detail.Name || detail.name || detail.BusinessName || detail.businessName;
+  if (!name) throw new Error("Business Details record found, but it doesn't have an obvious Name field — check the console for its raw shape.");
+  return name;
 }
 
 // Endpoint confirmed by user: "bank-or-cash-account" is the combined resource
