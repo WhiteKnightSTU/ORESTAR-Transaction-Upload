@@ -82,11 +82,47 @@ let resolvedGuids = {
   transactionId: null
 };
 
+// /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
+// _links pointing to separate batch endpoints per field type
+// (numberCustomFields, textCustomFields, checkboxCustomFields, etc.), each
+// with its own href (already carrying the business context token). Confirmed
+// live: the hub itself has no field data, only these links.
+async function fetchAllCustomFieldDefinitions() {
+  const hub = await managerApi("GET", "/api4/custom-fields");
+  const links = hub._links || hub.links || {};
+  const relevantKeys = ["numberCustomFields", "textCustomFields", "checkboxCustomFields", "dateCustomFields", "multipleValueCustomFields", "imageCustomFields"];
+  let allFields = [];
+  for (const key of relevantKeys) {
+    const linkObj = links[key];
+    if (!linkObj || !linkObj.href) continue;
+    let href = linkObj.href;
+    href += (href.indexOf("?") !== -1 ? "&" : "?") + "pageSize=1000";
+    try {
+      const batchData = await managerApi("GET", href);
+      const arrayKey = Object.keys(batchData).find(function(k) { return Array.isArray(batchData[k]); });
+      const items = arrayKey ? batchData[arrayKey] : [];
+      // Some batch responses wrap each entry as { key, item: {...} } rather
+      // than flat objects — unwrap defensively either way.
+      const unwrapped = items.map(function(it) {
+        if (it && it.item && typeof it.item === "object") {
+          const merged = Object.assign({}, it.item);
+          if (!merged.key && !merged.Key) merged.key = it.key || it.Key;
+          return merged;
+        }
+        return it;
+      });
+      allFields = allFields.concat(unwrapped);
+    } catch (e) {
+      console.warn("[ORESTAR] batch fetch failed for " + key + ":", e.message);
+    }
+  }
+  console.log("[ORESTAR] All custom field definitions (merged from batch endpoints):", allFields);
+  return allFields;
+}
+
 async function resolveFieldGuids() {
   const cfg = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
-  const data = await managerApi("GET", "/api4/custom-fields?pageSize=1000");
-  const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
-  const fields = arrayKey ? data[arrayKey] : [];
+  const fields = await fetchAllCustomFieldDefinitions();
 
   function placementText(f) {
     const p = f.Placement || f.placement || f.Placements || f.placements || "";
@@ -115,7 +151,6 @@ async function resolveFieldGuids() {
     transactionId: guidOf(transactionIdMatches[0])
   };
 
-  console.log("[ORESTAR] All custom field definitions:", fields);
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
 
   const statusEl = document.getElementById("resolvedFieldsStatus");
@@ -217,12 +252,9 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
   const el = document.getElementById("fieldsListResult");
   el.innerHTML = '<span class="small">Loading custom field definitions…</span>';
   try {
-    const data = await managerApi("GET", "/api4/custom-fields?pageSize=1000");
-    const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
-    const fields = arrayKey ? data[arrayKey] : [];
+    const fields = await fetchAllCustomFieldDefinitions();
     if (fields.length === 0) {
-      el.innerHTML = '<span class="small">No custom fields returned — check the console for the raw response shape.</span>';
-      console.log("[ORESTAR] /api4/custom-fields raw response:", data);
+      el.innerHTML = '<span class="small">No custom fields returned across any batch endpoint — check the console for details on each attempted fetch.</span>';
       return;
     }
     const rows = fields.map(function(f) {
