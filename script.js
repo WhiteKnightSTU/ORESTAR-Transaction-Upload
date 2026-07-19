@@ -266,7 +266,6 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
     }).join("");
     el.innerHTML = "<table><thead><tr><th>Name</th><th>Type</th><th>Placement</th><th>GUID</th></tr></thead><tbody>" + rows + "</tbody></table>" +
       '<div class="small" style="margin-top:4px;">Compare these Name values against config.js — GUIDs are resolved automatically by matching on Name, so this table is the source of truth for what the real names are.</div>';
-    console.log("[ORESTAR] /api4/custom-fields raw response:", data);
   } catch (e) {
     el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
   }
