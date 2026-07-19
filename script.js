@@ -294,6 +294,37 @@ async function fetchAccounts() {
   });
 }
 
+document.getElementById("discoverBtn").addEventListener("click", async () => {
+  if (!hasConnection()) {
+    showStatus("err", "Fill in the Base URL and Access Token above, and Test Connection first.");
+    return;
+  }
+  showStatus("pending", "Testing candidate endpoint names…");
+
+  const candidates = [
+    "/bank-or-cash-accounts", "/bank-or-cash-account",
+    "/bank-and-cash-accounts", "/bank-and-cash-account",
+    "/bankOrCashAccounts", "/bankOrCashAccount",
+    "/accounts", "/bank-accounts", "/cash-accounts",
+    "/bank-or-cash-account-list", "/chart-of-accounts",
+    "/balance-sheet-accounts"
+  ];
+
+  const results = [];
+  for (const path of candidates) {
+    try {
+      const data = await apiGet(`${path}?pageSize=1`);
+      const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+      const count = arrayKey ? data[arrayKey].length : "?";
+      results.push(`✓ ${path} — SUCCESS (found array "${arrayKey}", ${count} item(s) in this page)`);
+    } catch (e) {
+      results.push(`✗ ${path} — ${e.message}`);
+    }
+  }
+
+  showStatus(results.some(r => r.startsWith("✓")) ? "ok" : "err", results.join("\n"));
+});
+
 document.getElementById("loadAccountsBtn").addEventListener("click", async () => {
   if (!hasConnection()) {
     showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
