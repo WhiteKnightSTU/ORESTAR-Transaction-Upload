@@ -61,6 +61,22 @@ const TRAN_PURPOSE_CODES = {
   "Z": { label: "Preparation and Production of Advertising", requiresDescription: false }
 };
 
+// Accepts either the raw single-letter code ("G") or the full descriptive
+// label ("General Operational Expenses") and returns the code — the custom
+// field may be set up to store either, and this handles both rather than
+// assuming the field only ever contains bare codes.
+function mapTranPurposeToken(token) {
+  const trimmed = String(token || "").trim();
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase();
+  if (TRAN_PURPOSE_CODES[upper]) return upper;
+  const lower = trimmed.toLowerCase();
+  for (const code in TRAN_PURPOSE_CODES) {
+    if (TRAN_PURPOSE_CODES[code].label.toLowerCase() === lower) return code;
+  }
+  return null;
+}
+
 const PAYMENT_METHODS = [["","(none)"],["CHK","Check"],["ACH","Electronic Check"],["EFT","Electronic Funds Transfer"],
                           ["DC","Debit Card"],["CC","Credit Card"]];
 
@@ -903,12 +919,13 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const rawTranPurpose = getCustomFieldValueAny(detail, tranPurposeFieldIds, "text");
     let tranPurposeCodes = [];
     if (rawTranPurpose) {
-      tranPurposeCodes = String(rawTranPurpose).split(/[,;]/).map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
-      const invalid = tranPurposeCodes.filter(function(c) { return !TRAN_PURPOSE_CODES[c]; });
-      if (invalid.length > 0) {
-        console.warn("[ORESTAR] " + sourceLabel + " " + key + " has unrecognized Transaction Purpose code(s): " + invalid.join(", ") + " — dropped, check spelling against the valid code list.");
-        tranPurposeCodes = tranPurposeCodes.filter(function(c) { return TRAN_PURPOSE_CODES[c]; });
+      const tokens = String(rawTranPurpose).split(/[,;]/).map(function(s) { return s.trim(); }).filter(Boolean);
+      const mapped = tokens.map(mapTranPurposeToken);
+      const invalidTokens = tokens.filter(function(t, i) { return mapped[i] === null; });
+      if (invalidTokens.length > 0) {
+        console.warn("[ORESTAR] " + sourceLabel + " " + key + " has unrecognized Transaction Purpose value(s): \"" + invalidTokens.join("\", \"") + "\" — dropped. Check this matches a code or label from the valid list exactly.");
       }
+      tranPurposeCodes = mapped.filter(Boolean);
     }
 
     // If this Payment pays off one or more Purchase Invoices (filed
@@ -1046,13 +1063,13 @@ function renderReview() {
       const idx = Number(e.target.dataset.idx);
       const field = e.target.dataset.field;
       if (field === "tranPurpose") {
-        const codes = e.target.value.split(/[,;]/).map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
-        const invalid = codes.filter(function(c) { return !TRAN_PURPOSE_CODES[c]; });
-        if (invalid.length > 0) {
+        const tokens = e.target.value.split(/[,;]/).map(function(s) { return s.trim(); }).filter(Boolean);
+        const mapped = tokens.map(mapTranPurposeToken);
+        if (mapped.some(function(c) { return c === null; })) {
           e.target.style.borderColor = "#c0392b";
         } else {
           e.target.style.borderColor = "";
-          loadedTransactions[idx].tranPurposeCodes = codes;
+          loadedTransactions[idx].tranPurposeCodes = mapped;
         }
         return;
       }
