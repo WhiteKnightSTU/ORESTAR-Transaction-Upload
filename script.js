@@ -71,7 +71,7 @@ function saveConfig() {
     baseUrl: document.getElementById("baseUrl").value.trim(),
     apiToken: document.getElementById("apiToken").value.trim(),
     businessName: document.getElementById("businessName").value.trim(),
-    cfFiler: document.getElementById("cfFiler").value.trim(),
+    filerId: document.getElementById("filerId").value.trim(),
     cfTypeSubtype: document.getElementById("cfTypeSubtype").value.trim(),
     cfDownloaded: document.getElementById("cfDownloaded").value.trim()
   };
@@ -86,11 +86,11 @@ function saveConfig() {
   if (cfg.baseUrl) document.getElementById("baseUrl").value = cfg.baseUrl;
   if (cfg.apiToken) document.getElementById("apiToken").value = cfg.apiToken;
   if (cfg.businessName) document.getElementById("businessName").value = cfg.businessName;
-  if (cfg.cfFiler) document.getElementById("cfFiler").value = cfg.cfFiler;
+  if (cfg.filerId) document.getElementById("filerId").value = cfg.filerId;
   if (cfg.cfTypeSubtype) document.getElementById("cfTypeSubtype").value = cfg.cfTypeSubtype;
   if (cfg.cfDownloaded) document.getElementById("cfDownloaded").value = cfg.cfDownloaded;
 })();
-["baseUrl", "apiToken", "businessName", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+["baseUrl", "apiToken", "businessName", "filerId", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
   document.getElementById(id).addEventListener("change", saveConfig);
 });
 
@@ -176,36 +176,6 @@ async function apiGetV4(path) {
   return res.json();
 }
 
-// Auto-detect the business name instead of asking it to be typed (spaces in
-// the name caused issues as a raw header value — encodeURIComponent as a
-// query param, per the server's own error message, handles that cleanly).
-// /api4/businesses lists what this token can access; if there's exactly one,
-// we use it directly rather than requiring manual entry at all.
-async function detectBusinessName() {
-  // A direct browser GET to /api4/businesses returned 401 (not 404) — meaning
-  // this route genuinely exists and just needs credentials. Restored after
-  // wrongly ruling it out based on a misleading OPTIONS 404 (which shouldn't
-  // even fire for a same-origin request in the first place).
-  try {
-    const res = await fetch(`${getBaseUrlV4()}/businesses`, {
-      headers: { "X-Api-Key": getApiToken(), "accept": "application/json" }
-    });
-    if (!res.ok) throw new Error(`GET /businesses failed: HTTP ${res.status}`);
-    const data = await res.json();
-    const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-    const businesses = arrayKey ? data[arrayKey] : (Array.isArray(data) ? data : []);
-    if (businesses.length === 1) return businesses[0].Name || businesses[0].name;
-    if (businesses.length > 1) {
-      const names = businesses.map(b => b.Name || b.name).join(", ");
-      throw new Error(`Multiple businesses found (${names}) — set Business Name manually to the one you want.`);
-    }
-    throw new Error("No businesses returned.");
-  } catch (e) {
-    console.warn("[ORESTAR] /api4/businesses failed, trying Business Details record instead:", e.message);
-  }
-  return await fetchBusinessNameFromApi2();
-}
-
 // UNCONFIRMED: Manager's update verb for api2 isn't documented anywhere I could
 // find. Guessing PUT (standard REST convention, matches their "-form/{key}"
 // pattern for a single record). Falls back to PATCH if PUT is rejected outright.
@@ -238,32 +208,13 @@ document.getElementById("forgetBtn").addEventListener("click", () => {
   } catch (e) {
     console.warn("Could not clear localStorage:", e.message);
   }
-  ["baseUrl", "apiToken", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+  ["baseUrl", "apiToken", "businessName", "filerId", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
     document.getElementById(id).value = "";
   });
   const el = document.getElementById("connStatus");
   el.style.display = "block";
   el.className = "banner";
   el.textContent = "Saved credentials and config cleared from this browser.";
-});
-
-document.getElementById("detectBusinessBtn").addEventListener("click", async () => {
-  const el = document.getElementById("connStatus");
-  el.style.display = "block";
-  el.className = "banner";
-  if (!getBaseUrl() || !getApiToken()) {
-    el.textContent = "Fill in Base URL and Access Token first.";
-    return;
-  }
-  el.textContent = "Detecting business…";
-  try {
-    const name = await detectBusinessName();
-    document.getElementById("businessName").value = name;
-    saveConfig();
-    el.textContent = `Business detected: ${name}`;
-  } catch (e) {
-    el.textContent = `Could not auto-detect: ${e.message}`;
-  }
 });
 
 document.getElementById("testConnBtn").addEventListener("click", async () => {
@@ -283,18 +234,6 @@ document.getElementById("testConnBtn").addEventListener("click", async () => {
     await apiGet(`/receipts?pageSize=1`);
     saveConfig();
     el.textContent = "Connected successfully.";
-    // Auto-detect business name too, since /api4 calls need it and typing
-    // it by hand ran into encoding issues with spaces.
-    if (!getBusinessName()) {
-      try {
-        const name = await detectBusinessName();
-        document.getElementById("businessName").value = name;
-        saveConfig();
-        el.textContent = `Connected successfully. Business detected: ${name}`;
-      } catch (e) {
-        el.textContent = `Connected successfully. Could not auto-detect business name: ${e.message} (you can set it manually, or click Detect Business separately).`;
-      }
-    }
   } catch (e) {
     el.textContent = `Connection failed: ${e.message}. Double-check the Base URL (should end in /api2, no trailing slash issues) and that the Access Token is still valid in Settings → Access Tokens.`;
   }
@@ -310,88 +249,6 @@ function getCustomFieldValue(detail, fieldId, kind) {
     return (cf.Decimals && cf.Decimals[fieldId]) ?? (cf.Numbers && cf.Numbers[fieldId]) ?? (cf.Strings && cf.Strings[fieldId]);
   }
   return cf.Strings && cf.Strings[fieldId];
-}
-
-// UNCONFIRMED endpoint name — following Manager's "{resource}-form" singleton
-// pattern (there's only one Business Details record per business).
-// The "-form" suffix apparently requires a trailing GUID key in Manager's
-// router (same pattern as receipt-form/{key}) — a bare "business-details-form"
-// with nothing after it got misrouted, confirmed by the server's own error
-// message. Trying plausible alternates instead of guessing once more blind.
-const BUSINESS_DETAILS_CANDIDATES = [
-  "/business-details",
-  "/businessDetails",
-  "/business",
-  "/settings/business-details"
-];
-
-let cachedBusinessDetail = null;
-let cachedBusinessDetailPath = null;
-
-async function fetchBusinessDetailsRecord() {
-  if (cachedBusinessDetail) return { detail: cachedBusinessDetail, workingPath: cachedBusinessDetailPath };
-
-  let detail = null;
-  let workingPath = null;
-  const attempts = [];
-
-  for (const path of BUSINESS_DETAILS_CANDIDATES) {
-    try {
-      detail = await apiGet(path);
-      workingPath = `api2:${path}`;
-      attempts.push(`${path} (api2) — SUCCESS`);
-      break;
-    } catch (e) {
-      attempts.push(`${path} (api2) — ${e.message}`);
-      console.warn(`[ORESTAR] api2 ${path} failed:`, e.message);
-    }
-  }
-
-  // Business Details may live under /api4 instead, like custom-fields and
-  // bank-and-cash-accounts turned out to — only try this if a business name
-  // is set, since api4 calls require it.
-  if (!detail && getBusinessName()) {
-    for (const path of BUSINESS_DETAILS_CANDIDATES) {
-      try {
-        detail = await apiGetV4(path);
-        workingPath = `api4:${path}`;
-        attempts.push(`${path} (api4) — SUCCESS`);
-        break;
-      } catch (e) {
-        attempts.push(`${path} (api4) — ${e.message}`);
-        console.warn(`[ORESTAR] api4 ${path} failed:`, e.message);
-      }
-    }
-  } else if (!detail) {
-    attempts.push("(skipped api4 attempts — set Business Name first, since api4 calls require it)");
-  }
-
-  if (!detail) {
-    throw new Error(`Could not find the Business Details endpoint. Results:\n${attempts.join("\n")}\nA 401 means that path exists but auth was rejected for it specifically (worth checking separately from plain 404s) — check the Network tab response body on that one for more detail.`);
-  }
-  console.log(`[ORESTAR] Business Details found at: ${workingPath}`);
-  cachedBusinessDetail = detail;
-  cachedBusinessDetailPath = workingPath;
-  return { detail, workingPath };
-}
-
-async function fetchFilerId(filerFieldId) {
-  const { detail, workingPath } = await fetchBusinessDetailsRecord();
-
-  const raw = getCustomFieldValue(detail, filerFieldId, "number");
-  if (raw == null || raw === "") throw new Error(`Filer ID field came back empty from ${workingPath} — check the GUID and that the field actually has a value set in Business Details.`);
-  const cleaned = String(raw).trim();
-  if (!/^\d+$/.test(cleaned)) throw new Error(`Filer ID value "${cleaned}" isn't a plain positive integer — ORESTAR requires filer-id to be numeric.`);
-  return cleaned;
-}
-
-// Business name, derived from the same reliably-reachable /api2 Business
-// Details record instead of the flaky /api4/businesses call.
-async function fetchBusinessNameFromApi2() {
-  const { detail } = await fetchBusinessDetailsRecord();
-  const name = detail.Name || detail.name || detail.BusinessName || detail.businessName;
-  if (!name) throw new Error("Business Details record found, but it doesn't have an obvious Name field — check the console for its raw shape.");
-  return name;
 }
 
 // Endpoint confirmed by user: "bank-or-cash-account" is the combined resource
@@ -486,8 +343,7 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async () =>
     showStatus("err", "Fill in the Base URL and Access Token above, and click \"Test Connection\" first.");
     return;
   }
-  const cfFiler = document.getElementById("cfFiler").value.trim();
-  showStatus("pending", "Loading accounts and Filer ID…");
+  showStatus("pending", "Loading accounts…");
   try {
     availableAccounts = await fetchAccounts();
     const listEl = document.getElementById("accountList");
@@ -497,17 +353,6 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async () =>
       listEl.innerHTML = availableAccounts.map((a, i) =>
         `<label><input type="checkbox" data-acct-idx="${i}" checked> ${escapeXml(a.name)} <span class="small">(${a.kind})</span></label>`
       ).join("");
-    }
-
-    if (cfFiler) {
-      try {
-        const filerId = await fetchFilerId(cfFiler);
-        document.getElementById("resolvedFilerId").value = filerId;
-      } catch (e) {
-        document.getElementById("resolvedFilerId").value = "";
-        showStatus("err", `Accounts loaded, but Filer ID lookup failed: ${e.message}`);
-        return;
-      }
     }
     showStatus("ok", `Loaded ${availableAccounts.length} account(s). Uncheck any you want to exclude, then load transactions.`);
   } catch (err) {
@@ -835,8 +680,9 @@ function buildTransactionXml(id, contactId, t) {
 let lastGeneratedFilerId = "";
 
 document.getElementById("generateBtn").addEventListener("click", () => {
-  const filerId = document.getElementById("resolvedFilerId").value.trim();
-  if (!filerId) { showStatus("err", "Filer ID hasn't resolved yet — click \"Load Accounts & Filer ID\" above and check for errors."); return; }
+  const filerId = document.getElementById("filerId").value.trim();
+  if (!filerId) { showStatus("err", "Enter your Filer ID above first."); return; }
+  if (!/^\d+$/.test(filerId)) { showStatus("err", `Filer ID "${filerId}" isn't a plain positive integer — ORESTAR requires filer-id to be numeric.`); return; }
   if (loadedTransactions.some(t => !t.typeCode || !t.subCode)) {
     showStatus("err", "Every transaction needs a Type and Sub-type — check the table above."); return;
   }

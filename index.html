@@ -96,12 +96,11 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
     </div>
     <div>
       <label for="businessName">Business Name
-        <span class="hint">Auto-detected from Manager — click Detect Business, or it fills in after Test Connection.</span>
+        <span class="hint">Exactly as it appears in Manager (spaces are fine — handled correctly now).</span>
       </label>
-      <input type="text" id="businessName" placeholder="(auto-detected)">
+      <input type="text" id="businessName" placeholder="e.g. Acme Pty Ltd">
     </div>
   </div>
-  <button id="detectBusinessBtn" type="button" class="secondary">Detect Business</button>
   <button id="testConnBtn" type="button" class="secondary">Test Connection</button>
   <button id="forgetBtn" type="button" class="secondary">Forget Saved Credentials</button>
 </fieldset>
@@ -109,17 +108,17 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
 <fieldset>
   <legend>Custom Fields</legend>
   <div class="small" style="margin-bottom:6px;">
-    Paste each custom field's GUID (Settings &gt; Custom Fields &gt; edit the field &gt; copy the ID from the URL).
+    Paste each custom field's GUID (Settings &gt; Custom Fields &gt; edit the field &gt; copy the ID from the URL, or use "List Custom Field Definitions" below).
   </div>
   <button id="listFieldsBtn" type="button" class="secondary">List Custom Field Definitions</button>
   <div id="fieldsListResult" style="margin-top:8px;"></div>
 
   <div class="row">
     <div>
-      <label for="cfFiler">Filer ID field GUID
-        <span class="hint">Number-type custom field on Business Details holding your ORESTAR committee ID.</span>
+      <label for="filerId">Filer ID
+        <span class="hint">Your ORESTAR committee ID — Business Details lookup couldn't be resolved via the API, so this is entered manually.</span>
       </label>
-      <input type="text" id="cfFiler" placeholder="custom field GUID">
+      <input type="text" id="filerId" placeholder="e.g. 5276">
     </div>
     <div>
       <label for="cfTypeSubtype">"Type - Subtype" field GUID
@@ -135,12 +134,9 @@ the candidate or treasurer must still log into ORESTAR, review the uploaded tran
     </div>
   </div>
 
-  <label>Resolved Filer ID <span class="hint">Fetched automatically from Business Details — verify this looks right before filing.</span></label>
-  <input type="text" id="resolvedFilerId" readonly placeholder="(will populate after Load Accounts)">
-
   <label>Bank / Cash Accounts to include</label>
   <div class="account-list" id="accountList"><span class="small">Click "Load Accounts" below.</span></div>
-  <button id="loadAccountsBtn" type="button" class="secondary">Load Accounts &amp; Filer ID</button>
+  <button id="loadAccountsBtn" type="button" class="secondary">Load Accounts</button>
   <button id="discoverBtn" type="button" class="secondary">Discover Account Endpoint</button>
 
   <div style="margin-top:14px;">
