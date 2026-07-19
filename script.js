@@ -256,22 +256,23 @@ const BUSINESS_DETAILS_CANDIDATES = [
 
 async function fetchFilerId(filerFieldId) {
   let detail = null;
-  let lastError = null;
   let workingPath = null;
+  const attempts = [];
 
   for (const path of BUSINESS_DETAILS_CANDIDATES) {
     try {
       detail = await apiGet(path);
       workingPath = path;
+      attempts.push(`${path} — SUCCESS`);
       break;
     } catch (e) {
-      lastError = e;
+      attempts.push(`${path} — ${e.message}`);
       console.warn(`[ORESTAR] ${path} failed:`, e.message);
     }
   }
 
   if (!detail) {
-    throw new Error(`Could not find the Business Details endpoint — tried ${BUSINESS_DETAILS_CANDIDATES.join(", ")}, all failed. Last error: ${lastError ? lastError.message : "unknown"}. Check the browser Network tab for the exact response body on one of these to pin down the real path.`);
+    throw new Error(`Could not find the Business Details endpoint. Results:\n${attempts.join("\n")}\nA 401 means that path exists but auth was rejected for it specifically (worth checking separately from plain 404s) — check the Network tab response body on that one for more detail.`);
   }
   console.log(`[ORESTAR] Business Details found at: ${workingPath}`);
 
@@ -307,6 +308,36 @@ async function fetchAccounts() {
     };
   });
 }
+
+document.getElementById("listFieldsBtn").addEventListener("click", async () => {
+  const el = document.getElementById("fieldsListResult");
+  if (!hasConnection()) {
+    el.innerHTML = `<span class="small">Fill in Base URL and Access Token, and Test Connection first.</span>`;
+    return;
+  }
+  el.innerHTML = `<span class="small">Loading custom field definitions…</span>`;
+  try {
+    const data = await apiGetV4(`/custom-fields?pageSize=1000`);
+    const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+    const fields = arrayKey ? data[arrayKey] : [];
+    if (fields.length === 0) {
+      el.innerHTML = `<span class="small">No custom fields returned — check the console for the raw response shape.</span>`;
+      console.log("[ORESTAR] /api4/custom-fields raw response:", data);
+      return;
+    }
+    const rows = fields.map(f => {
+      const name = f.Name || f.name || f.Label || f.label || "(unnamed)";
+      const type = f.Type || f.type || "?";
+      const placement = f.Placement || f.placement || (Array.isArray(f.Placements) ? f.Placements.join(", ") : "") || "?";
+      const guid = f.key || f.Key || f.id || f.Id || "?";
+      return `<tr><td>${escapeXml(name)}</td><td>${escapeXml(type)}</td><td>${escapeXml(placement)}</td><td style="font-family:ui-monospace,monospace;">${escapeXml(guid)}</td></tr>`;
+    }).join("");
+    el.innerHTML = `<table><thead><tr><th>Name</th><th>Type</th><th>Placement</th><th>GUID</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="small" style="margin-top:4px;">Copy the GUID for your Filer ID / Type-Subtype / Downloaded fields into the boxes below.</div>`;
+  } catch (e) {
+    el.innerHTML = `<span class="small">Failed: ${escapeXml(e.message)}</span>`;
+  }
+});
 
 document.getElementById("discoverBtn").addEventListener("click", async () => {
   if (!hasConnection()) {
