@@ -177,6 +177,21 @@ async function apiUpdate(path, body) {
   return res.json().catch(() => ({}));
 }
 
+document.getElementById("forgetBtn").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (e) {
+    console.warn("Could not clear localStorage:", e.message);
+  }
+  ["baseUrl", "apiToken", "cfFiler", "cfTypeSubtype", "cfDownloaded"].forEach(id => {
+    document.getElementById(id).value = "";
+  });
+  const el = document.getElementById("connStatus");
+  el.style.display = "block";
+  el.className = "banner";
+  el.textContent = "Saved credentials and config cleared from this browser.";
+});
+
 document.getElementById("testConnBtn").addEventListener("click", async () => {
   const el = document.getElementById("connStatus");
   el.style.display = "block";
@@ -187,7 +202,11 @@ document.getElementById("testConnBtn").addEventListener("click", async () => {
     return;
   }
   try {
-    await apiGet(`/business-details-form`);
+    // /receipts is well-confirmed from community examples — testing against
+    // it keeps this check independent of the still-uncertain Business
+    // Details endpoint name, so a wrong guess there doesn't make basic
+    // connectivity look broken too.
+    await apiGet(`/receipts?pageSize=1`);
     saveConfig();
     el.textContent = "Connected successfully.";
   } catch (e) {
@@ -209,10 +228,40 @@ function getCustomFieldValue(detail, fieldId, kind) {
 
 // UNCONFIRMED endpoint name — following Manager's "{resource}-form" singleton
 // pattern (there's only one Business Details record per business).
+// The "-form" suffix apparently requires a trailing GUID key in Manager's
+// router (same pattern as receipt-form/{key}) — a bare "business-details-form"
+// with nothing after it got misrouted, confirmed by the server's own error
+// message. Trying plausible alternates instead of guessing once more blind.
+const BUSINESS_DETAILS_CANDIDATES = [
+  "/business-details",
+  "/businessDetails",
+  "/business",
+  "/settings/business-details"
+];
+
 async function fetchFilerId(filerFieldId) {
-  const detail = await apiGet(`/business-details-form`);
+  let detail = null;
+  let lastError = null;
+  let workingPath = null;
+
+  for (const path of BUSINESS_DETAILS_CANDIDATES) {
+    try {
+      detail = await apiGet(path);
+      workingPath = path;
+      break;
+    } catch (e) {
+      lastError = e;
+      console.warn(`[ORESTAR] ${path} failed:`, e.message);
+    }
+  }
+
+  if (!detail) {
+    throw new Error(`Could not find the Business Details endpoint — tried ${BUSINESS_DETAILS_CANDIDATES.join(", ")}, all failed. Last error: ${lastError ? lastError.message : "unknown"}. Check the browser Network tab for the exact response body on one of these to pin down the real path.`);
+  }
+  console.log(`[ORESTAR] Business Details found at: ${workingPath}`);
+
   const raw = getCustomFieldValue(detail, filerFieldId, "number");
-  if (raw == null || raw === "") throw new Error("Filer ID field came back empty — check the GUID and that the field actually has a value set in Business Details.");
+  if (raw == null || raw === "") throw new Error(`Filer ID field came back empty from ${workingPath} — check the GUID and that the field actually has a value set in Business Details.`);
   const cleaned = String(raw).trim();
   if (!/^\d+$/.test(cleaned)) throw new Error(`Filer ID value "${cleaned}" isn't a plain positive integer — ORESTAR requires filer-id to be numeric.`);
   return cleaned;
