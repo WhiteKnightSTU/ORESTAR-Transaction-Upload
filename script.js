@@ -71,51 +71,64 @@ async function managerApi(method, path, body) {
   return await postMessageWithResponse({ type: "api-request", method: method, path: path, body: body || null });
 }
 
-const STORAGE_KEY = "orestar_export_config";
 
-function loadStoredConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-  } catch (e) {
-    return {};
+// Resolved field GUIDs — fetched fresh each time "Load Accounts & Resolve
+// Fields" runs, by matching config.js's field NAMES against the real
+// definitions. No GUIDs stored anywhere; nothing to keep in sync manually.
+let resolvedGuids = {
+  filer: null,
+  typeSubtypeReceipt: null,
+  typeSubtypePayment: null,
+  transactionId: null
+};
+
+async function resolveFieldGuids() {
+  const cfg = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
+  const data = await managerApi("GET", "/api4/custom-fields?pageSize=1000");
+  const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
+  const fields = arrayKey ? data[arrayKey] : [];
+
+  function placementText(f) {
+    const p = f.Placement || f.placement || f.Placements || f.placements || "";
+    return Array.isArray(p) ? p.join(",").toLowerCase() : String(p).toLowerCase();
   }
-}
-function saveConfig() {
-  const cfg = {
-    cfFiler: document.getElementById("cfFiler").value.trim(),
-    cfTypeSubtypeReceipt: document.getElementById("cfTypeSubtypeReceipt").value.trim(),
-    cfTypeSubtypePayment: document.getElementById("cfTypeSubtypePayment").value.trim(),
-    cfTransactionId: document.getElementById("cfTransactionId").value.trim()
+  function findByName(name) {
+    return fields.filter(function(f) {
+      return (f.Name || f.name || f.Label || f.label || "").trim() === name.trim();
+    });
+  }
+  function guidOf(f) {
+    return f ? (f.key || f.Key || f.id || f.Id || null) : null;
+  }
+
+  const filerMatches = findByName(cfg.FILER_ID_FIELD_NAME || "");
+  const typeSubtypeMatches = findByName(cfg.TYPE_SUBTYPE_FIELD_NAME || "");
+  const transactionIdMatches = findByName(cfg.TRANSACTION_ID_FIELD_NAME || "");
+
+  const typeSubtypeReceipt = typeSubtypeMatches.find(function(f) { return placementText(f).indexOf("eceipt") !== -1; });
+  const typeSubtypePayment = typeSubtypeMatches.find(function(f) { return placementText(f).indexOf("ayment") !== -1; });
+
+  resolvedGuids = {
+    filer: guidOf(filerMatches[0]),
+    typeSubtypeReceipt: guidOf(typeSubtypeReceipt),
+    typeSubtypePayment: guidOf(typeSubtypePayment),
+    transactionId: guidOf(transactionIdMatches[0])
   };
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
-  } catch (e) {
-    console.warn("Could not save config to localStorage:", e.message);
-  }
-}
-(function restoreConfig() {
-  const cfg = loadStoredConfig();
-  const fileConfig = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
-  document.getElementById("cfFiler").value = cfg.cfFiler || fileConfig.FILER_ID_FIELD_GUID || "";
-  document.getElementById("cfTypeSubtypeReceipt").value = cfg.cfTypeSubtypeReceipt || fileConfig.TYPE_SUBTYPE_FIELD_GUID_RECEIPT || "";
-  document.getElementById("cfTypeSubtypePayment").value = cfg.cfTypeSubtypePayment || fileConfig.TYPE_SUBTYPE_FIELD_GUID_PAYMENT || "";
-  document.getElementById("cfTransactionId").value = cfg.cfTransactionId || fileConfig.TRANSACTION_ID_FIELD_GUID || "";
-})();
-["cfFiler", "cfTypeSubtypeReceipt", "cfTypeSubtypePayment", "cfTransactionId"].forEach(function(id) {
-  document.getElementById(id).addEventListener("change", saveConfig);
-});
 
-document.getElementById("forgetBtn").addEventListener("click", function() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch (e) {
-    console.warn("Could not clear localStorage:", e.message);
-  }
-  ["cfFiler", "cfTypeSubtypeReceipt", "cfTypeSubtypePayment", "cfTransactionId"].forEach(function(id) {
-    document.getElementById(id).value = "";
-  });
-  showStatus("ok", "Saved field GUIDs cleared from this browser.");
-});
+  console.log("[ORESTAR] All custom field definitions:", fields);
+  console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
+
+  const statusEl = document.getElementById("resolvedFieldsStatus");
+  const lines = [
+    (resolvedGuids.filer ? "✓" : "✗") + " Filer ID (\"" + (cfg.FILER_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.filer ? "" : " — not found"),
+    (resolvedGuids.typeSubtypeReceipt ? "✓" : "✗") + " Type-Subtype / Receipts (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypeReceipt ? "" : " — not found on a field placed on Receipts"),
+    (resolvedGuids.typeSubtypePayment ? "✓" : "✗") + " Type-Subtype / Payments (\"" + (cfg.TYPE_SUBTYPE_FIELD_NAME || "") + "\")" + (resolvedGuids.typeSubtypePayment ? "" : " — not found on a field placed on Payments"),
+    (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found")
+  ];
+  statusEl.innerHTML = lines.join("<br>");
+
+  return resolvedGuids;
+}
 
 function showStatus(kind, message) {
   const el = document.getElementById("status");
@@ -227,8 +240,10 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
 });
 
 document.getElementById("loadAccountsBtn").addEventListener("click", async function() {
-  showStatus("pending", "Loading accounts and Filer ID…");
+  showStatus("pending", "Resolving custom fields and loading accounts…");
   try {
+    await resolveFieldGuids();
+
     availableAccounts = await fetchAccounts();
     const listEl = document.getElementById("accountList");
     if (availableAccounts.length === 0) {
@@ -239,11 +254,10 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async funct
       }).join("");
     }
 
-    const cfFiler = document.getElementById("cfFiler").value.trim();
     let filerNote = "";
-    if (cfFiler) {
+    if (resolvedGuids.filer) {
       try {
-        const filerId = await fetchFilerId(cfFiler);
+        const filerId = await fetchFilerId(resolvedGuids.filer);
         document.getElementById("resolvedFilerId").value = filerId;
         filerNote = " Filer ID resolved: " + filerId + ".";
       } catch (e) {
@@ -253,7 +267,7 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async funct
       }
     } else {
       document.getElementById("resolvedFilerId").value = "";
-      filerNote = " Filer ID field GUID is empty — fill it in above and click this button again to resolve it.";
+      filerNote = " Filer ID field not found by name — check config.js and the resolved-fields status above.";
     }
     showStatus("ok", "Loaded " + availableAccounts.length + " account(s)." + filerNote);
   } catch (err) {
@@ -349,11 +363,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 }
 
 document.getElementById("loadBtn").addEventListener("click", async function() {
-  const cfTypeSubtypeReceipt = document.getElementById("cfTypeSubtypeReceipt").value.trim();
-  const cfTypeSubtypePayment = document.getElementById("cfTypeSubtypePayment").value.trim();
-  const cfTransactionId = document.getElementById("cfTransactionId").value.trim();
-  if (!cfTypeSubtypeReceipt || !cfTypeSubtypePayment || !cfTransactionId) {
-    showStatus("err", "Fill in both Type-Subtype field GUIDs and the Transaction ID field GUID first.");
+  if (!resolvedGuids.typeSubtypeReceipt || !resolvedGuids.typeSubtypePayment || !resolvedGuids.transactionId) {
+    showStatus("err", "Fields aren't fully resolved yet — click \"Load Accounts & Resolve Fields\" above first, and check the resolved-fields status for anything missing.");
     return;
   }
 
@@ -361,12 +372,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", cfTypeSubtypeReceipt, cfTransactionId, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", cfTypeSubtypePayment, cfTransactionId, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeReceipt, resolvedGuids.transactionId, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypePayment, resolvedGuids.transactionId, selectedKeys);
     loadedTransactions = receiptResult.results.concat(paymentResult.results);
 
     if (loadedTransactions.length === 0) {
-      showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check: the Transaction ID field GUID is right, and the account picker matches what you expect.");
+      showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check the resolved-fields status above, and that the account picker matches what you expect.");
       document.getElementById("reviewSection").style.display = "none";
       return;
     }
@@ -643,8 +654,8 @@ function renderTxnIdTable() {
 }
 
 document.getElementById("saveTxnIdsBtn").addEventListener("click", async function() {
-  const cfTransactionId = document.getElementById("cfTransactionId").value.trim();
-  if (!cfTransactionId) { showMarkStatus("err", "Transaction ID field GUID is missing (Custom Fields section above)."); return; }
+  const cfTransactionId = resolvedGuids.transactionId;
+  if (!cfTransactionId) { showMarkStatus("err", "Transaction ID field wasn't resolved — click \"Load Accounts & Resolve Fields\" above first."); return; }
 
   const rows = document.querySelectorAll('#txnIdBody input[data-field="orestarTxnId"]');
   const entries = []; // { idx, value }

@@ -1,27 +1,21 @@
 // ORESTAR export tool — one-time configuration.
 //
-// These GUIDs identify your custom FIELD DEFINITIONS (created once in
-// Settings > Custom Fields) — not any individual value. They stay the same
-// across every account, every transaction, every session. You'll only need
-// to change these if you delete and recreate one of the custom fields, or
-// if you deploy this tool for a different Manager business (which would
-// have its own separately-created fields with different GUIDs).
+// Field GUIDs are resolved automatically at runtime (same way the Bank/Cash
+// Account list is) by matching these NAMES against your actual custom field
+// definitions via /api4/custom-fields — no GUIDs to find or paste in here.
 //
-// Find/confirm these via the "List Custom Field Definitions" button in the
-// tool itself, or: Settings > Custom Fields > edit the field > copy the ID
-// from the browser's address bar.
+// These only need to change if you rename the fields in Manager, or deploy
+// this tool for a different business with differently-named fields.
 
 const ORESTAR_CONFIG = {
   // Number-type field on Business Details holding your ORESTAR committee ID.
-  FILER_ID_FIELD_GUID: "f09e9200-6cf1-497b-8a42-cf372600f82e",
+  FILER_ID_FIELD_NAME: "PAC ID #",
 
-  // "Type - Subtype" is actually TWO separate custom fields with the same
-  // name — one placed on Receipts, one placed on Payments. Different GUIDs.
-  TYPE_SUBTYPE_FIELD_GUID_RECEIPT: "",
-  TYPE_SUBTYPE_FIELD_GUID_PAYMENT: "",
+  // Text-type field name — same name used on both Receipts and Payments,
+  // but they're two separate field definitions; matched by name + placement.
+  TYPE_SUBTYPE_FIELD_NAME: "Type - Subtype",
 
-  // Number-type field (same style as PAC ID #) storing a Transaction ID.
-  // Empty/null = not yet exported (include it). Has any value = already
-  // exported (exclude it). Placed on both Receipts and Payments.
-  TRANSACTION_ID_FIELD_GUID: ""
+  // Number-type field (same style as PAC ID #), placed on both Receipts and
+  // Payments as a single shared field. Empty/null = not yet exported.
+  TRANSACTION_ID_FIELD_NAME: "Transaction ID"
 };
