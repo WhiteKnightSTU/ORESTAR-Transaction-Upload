@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<script>
+// Registered as the very first thing on the page — before any other markup,
+// styles, or script parses — so we can't miss Manager's context message if
+// it's sent immediately on iframe load. Mirrors Manager's own reference
+// implementation exactly: the raw message data IS the context object.
+window.__msgLog = [];
+console.log("[ORESTAR ext] listener registered at", new Date().toISOString(), "location:", window.location.href, "in iframe:", window.self !== window.top);
+window.addEventListener("message", (event) => {
+  window.__msgLog.push({ t: new Date().toISOString(), origin: event.origin, data: event.data });
+  console.log("[ORESTAR ext] message received — origin:", event.origin, "data:", event.data);
+  if (event.data && typeof event.data === "object") {
+    window.managerAppContext = event.data;
+    console.log("[ORESTAR ext] window.managerAppContext set to:", window.managerAppContext);
+  }
+});
+</script>
+<title>ORESTAR Export — Manager.io Extension</title>
+<style>
+  :root {
+    --accent: #2b6cb0;
+    --border: #d5dbe3;
+    --muted: #6b7280;
+    --danger: #c0392b;
+    --ok: #1f7a3d;
+    --warn: #8a6100;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    margin: 0;
+    padding: 16px;
+    color: #1a202c;
+    font-size: 13.5px;
+  }
+  h2 { margin: 0 0 4px 0; font-size: 16px; }
+  h3 { margin: 18px 0 8px; font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .subtitle { color: var(--muted); margin-bottom: 14px; font-size: 12.5px; }
+  .banner {
+    background: #eef4fb; border: 1px solid #cfe0f3; color: #1a4971;
+    padding: 10px 12px; border-radius: 6px; font-size: 12.5px; margin-bottom: 14px;
+  }
+  .banner.warn { background: #fff8e6; border-color: #f0dca0; color: var(--warn); }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px 14px; margin-bottom: 14px; }
+  legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  label { display: block; margin-top: 8px; margin-bottom: 3px; font-weight: 600; font-size: 12px; }
+  label .hint { font-weight: 400; color: var(--muted); display: block; font-size: 11px; margin-top: 1px; }
+  input, select, textarea {
+    width: 100%; padding: 6px 7px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 12.5px; font-family: inherit;
+  }
+  input[readonly] { background: #f7f8fa; color: var(--muted); }
+  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 140px; }
+  button {
+    background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 6px;
+    font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 10px; margin-right: 8px;
+  }
+  button.secondary { background: #6b7280; }
+  button.danger-ok { background: var(--ok); }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  th, td { border: 1px solid var(--border); padding: 5px 6px; vertical-align: top; }
+  th { background: #f7f8fa; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); }
+  td input, td select { font-size: 11.5px; padding: 4px 5px; min-width: 90px; }
+  #status, #markStatus { margin-top: 10px; padding: 9px 11px; border-radius: 6px; font-size: 12.5px; display: none; white-space: pre-wrap; word-break: break-word; }
+  #status.ok, #markStatus.ok { display: block; background: #eafaf0; color: var(--ok); border: 1px solid #bfe9cf; }
+  #status.err, #markStatus.err { display: block; background: #fdecea; color: var(--danger); border: 1px solid #f5c2bb; }
+  #status.pending, #markStatus.pending { display: block; background: #eef4fb; color: var(--accent); border: 1px solid #cfe0f3; }
+  .contact-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+  .contact-card h4 { margin: 0 0 6px; font-size: 12.5px; }
+  .small { font-size: 11px; color: var(--muted); }
+  .account-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+  .account-list label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; font-size: 12.5px; }
+  .account-list input[type="checkbox"] { width: auto; }
+</style>
+</head>
+<body>
+
+<h2>ORESTAR Transaction Export</h2>
+<div class="subtitle">Pulls Receipts and Payments from Manager that haven't been exported yet, and builds an ORESTAR-compliant XML file.</div>
+
+<div class="banner">
+This generates a file for <strong>manual upload</strong> via ORESTAR's "Upload File" feature. It does not file anything automatically —
+the candidate or treasurer must still log into ORESTAR, review the uploaded transactions, and file/attest to them there.
+</div>
+<div class="banner warn" id="configWarning" style="display:none"></div>
+<div class="banner" id="debugPanel" style="font-family: ui-monospace, Consolas, monospace; font-size: 11px; white-space: pre-wrap;"></div>
+
+<fieldset>
+  <legend>Configuration</legend>
+  <div class="small" style="margin-bottom:6px;">
+    One-time setup — paste each custom field's GUID (Settings &gt; Custom Fields &gt; edit the field &gt; copy the ID from the URL).
+  </div>
+  <div class="row">
+    <div>
+      <label for="cfFiler">Filer ID field GUID
+        <span class="hint">Number-type custom field on Business Details holding your ORESTAR committee ID.</span>
+      </label>
+      <input type="text" id="cfFiler" placeholder="custom field GUID">
+    </div>
+    <div>
+      <label for="cfTypeSubtype">"Type - Subtype" field GUID
+        <span class="hint">The shared field placed on both Receipts and Payments.</span>
+      </label>
+      <input type="text" id="cfTypeSubtype" placeholder="custom field GUID">
+    </div>
+    <div>
+      <label for="cfDownloaded">"Downloaded" field GUID
+        <span class="hint">Checkbox-type field placed on both Receipts and Payments, used to track what's already been exported.</span>
+      </label>
+      <input type="text" id="cfDownloaded" placeholder="custom field GUID">
+    </div>
+  </div>
+
+  <label>Resolved Filer ID <span class="hint">Fetched automatically from Business Details — verify this looks right before filing.</span></label>
+  <input type="text" id="resolvedFilerId" readonly placeholder="(will populate after Load Accounts)">
+
+  <label>Bank / Cash Accounts to include</label>
+  <div class="account-list" id="accountList"><span class="small">Click "Load Accounts" below.</span></div>
+  <button id="loadAccountsBtn" type="button" class="secondary">Load Accounts &amp; Filer ID</button>
+
+  <div style="margin-top:14px;">
+    <button id="loadBtn" type="button">Load Not-Yet-Downloaded Transactions</button>
+  </div>
+</fieldset>
+
+<div id="status"></div>
+
+<div id="reviewSection" style="display:none">
+  <h3>1. Review Transactions</h3>
+  <div class="small">Type/Sub-type are read from your shared custom field. Fix anything it didn't capture (a description for "Miscellaneous" categories, a payment method/check number, etc).</div>
+  <table id="tranTable">
+    <thead>
+      <tr>
+        <th>Date</th><th>Entered</th><th>Account</th><th>Amount</th><th>Contact Name</th><th>Type</th><th>Sub-type</th>
+        <th>Description</th><th>Payment Method</th><th>Check #</th><th>Source</th>
+      </tr>
+    </thead>
+    <tbody id="tranBody"></tbody>
+  </table>
+
+  <h3>2. Confirm Contacts</h3>
+  <div class="small">
+    ORESTAR requires each contact classified as Individual/Business/Committee/etc., with a name broken into the right fields.
+    If a contributor's or payee's total for the year is over $100, ORESTAR also expects address (and, for individuals, occupation
+    and employer) — add those here if you have them.
+  </div>
+  <div id="contactsList"></div>
+
+  <h3>3. Generate File</h3>
+  <button id="generateBtn" type="button">Generate ORESTAR XML</button>
+  <button id="downloadBtn" type="button" class="secondary" disabled>Download XML</button>
+  <textarea id="xmlOutput" rows="14" readonly style="margin-top:10px; display:none;"></textarea>
+
+  <div style="margin-top:10px;">
+    <button id="markDownloadedBtn" type="button" class="danger-ok" disabled>Mark These as Downloaded in Manager</button>
+    <div class="small">Do this only after you've actually saved/uploaded the file — it's what keeps these transactions out of your next export.</div>
+  </div>
+  <div id="markStatus"></div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
