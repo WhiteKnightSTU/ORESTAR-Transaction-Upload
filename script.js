@@ -475,8 +475,16 @@ function extractAmount(detail, item) {
       // Confirmed from the real schema: Purchase Invoice / Expense Claim line
       // items use "total" (post-tax) or "totalBeforeTax" — there's no "Amount"
       // field on these at all, unlike what we'd assumed.
-      const lineValue = firstDefined(l.Total, l.total, l.TotalBeforeTax, l.totalBeforeTax, l.Amount, l.amount);
-      sum += getAmountValue(lineValue) || 0;
+      let lineValue = getAmountValue(firstDefined(l.Total, l.total, l.TotalBeforeTax, l.totalBeforeTax, l.Amount, l.amount));
+      // If no total-style field has a value at all, compute from quantity ×
+      // unit price as a last resort — approximate (doesn't account for
+      // discounts/tax precisely) but better than silently reporting 0.
+      if (!lineValue) {
+        const qty = getAmountValue(firstDefined(l.Qty, l.qty));
+        const unitPrice = getAmountValue(firstDefined(l.PurchaseUnitPrice, l.purchaseUnitPrice, l.UnitPrice, l.unitPrice, l.CurrencyAmount, l.currencyAmount));
+        if (qty && unitPrice) lineValue = qty * unitPrice;
+      }
+      sum += lineValue || 0;
     });
     // Purchase Invoices can add landed costs (freight, duty, etc.) on top of
     // the line totals — confirmed present in the real schema as a sibling
@@ -911,6 +919,9 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       if (Array.isArray(linesForDebug) && linesForDebug.length > 0) {
         console.log("[ORESTAR] " + sourceLabel + " " + key + " — Lines[0] full content:", linesForDebug[0]);
         console.log("[ORESTAR] " + sourceLabel + " " + key + " — Lines[0] field names:", Object.keys(linesForDebug[0] || {}));
+        // JSON.stringify prints as a plain string — immune to the console's
+        // object-preview truncation that's been hiding the real values.
+        console.log("[ORESTAR] " + sourceLabel + " " + key + " — Lines[0] as JSON string: " + JSON.stringify(linesForDebug[0]));
       }
     }
 
