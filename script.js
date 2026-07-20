@@ -480,9 +480,10 @@ function extractAmount(detail, item) {
       // unit price as a last resort — approximate (doesn't account for
       // discounts/tax precisely) but better than silently reporting 0.
       if (!lineValue) {
-        const qty = getAmountValue(firstDefined(l.Qty, l.qty));
+        const qtyRaw = firstDefined(l.Qty, l.qty);
+        const qty = qtyRaw != null ? getAmountValue(qtyRaw) : 1; // confirmed: Manager omits Qty entirely when it's the default (1), not sends it as 0
         const unitPrice = getAmountValue(firstDefined(l.PurchaseUnitPrice, l.purchaseUnitPrice, l.UnitPrice, l.unitPrice, l.CurrencyAmount, l.currencyAmount));
-        if (qty && unitPrice) lineValue = qty * unitPrice;
+        if (unitPrice) lineValue = qty * unitPrice;
       }
       sum += lineValue || 0;
     });
