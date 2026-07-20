@@ -77,6 +77,24 @@ function mapTranPurposeToken(token) {
   return null;
 }
 
+// Several labels contain commas themselves ("Other Advertising (yard signs,
+// buttons, etc.)", "Literature, Brochures, Printing") — splitting on comma
+// unconditionally chopped these into garbage fragments. Try the whole raw
+// text as a single label/code first; only fall back to comma-splitting
+// (for a genuine multi-code field like "G, T") if that single-value match
+// fails entirely.
+function parseTranPurposeText(raw) {
+  if (!raw) return { codes: [], invalidTokens: [] };
+  const trimmed = String(raw).trim();
+  const wholeMatch = mapTranPurposeToken(trimmed);
+  if (wholeMatch) return { codes: [wholeMatch], invalidTokens: [] };
+
+  const tokens = trimmed.split(/[,;]/).map(function(s) { return s.trim(); }).filter(Boolean);
+  const mapped = tokens.map(mapTranPurposeToken);
+  const invalidTokens = tokens.filter(function(t, i) { return mapped[i] === null; });
+  return { codes: mapped.filter(Boolean), invalidTokens: invalidTokens };
+}
+
 const PAYMENT_METHODS = [["","(none)"],["CHK","Check"],["ACH","Electronic Check"],["EFT","Electronic Funds Transfer"],
                           ["DC","Debit Card"],["CC","Credit Card"]];
 
@@ -990,13 +1008,11 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const rawTranPurpose = getCustomFieldValueAny(detail, tranPurposeFieldIds, "text");
     let tranPurposeCodes = [];
     if (rawTranPurpose) {
-      const tokens = String(rawTranPurpose).split(/[,;]/).map(function(s) { return s.trim(); }).filter(Boolean);
-      const mapped = tokens.map(mapTranPurposeToken);
-      const invalidTokens = tokens.filter(function(t, i) { return mapped[i] === null; });
-      if (invalidTokens.length > 0) {
-        console.warn("[ORESTAR] " + sourceLabel + " " + key + " has unrecognized Transaction Purpose value(s): \"" + invalidTokens.join("\", \"") + "\" — dropped. Check this matches a code or label from the valid list exactly.");
+      const parsed = parseTranPurposeText(rawTranPurpose);
+      if (parsed.invalidTokens.length > 0) {
+        console.warn("[ORESTAR] " + sourceLabel + " " + key + " has unrecognized Transaction Purpose value(s): \"" + parsed.invalidTokens.join("\", \"") + "\" — dropped. Check this matches a code or label from the valid list exactly.");
       }
-      tranPurposeCodes = mapped.filter(Boolean);
+      tranPurposeCodes = parsed.codes;
     }
 
     // If this Payment pays off one or more Purchase Invoices (filed
@@ -1139,13 +1155,12 @@ function renderReview() {
       const idx = Number(e.target.dataset.idx);
       const field = e.target.dataset.field;
       if (field === "tranPurpose") {
-        const tokens = e.target.value.split(/[,;]/).map(function(s) { return s.trim(); }).filter(Boolean);
-        const mapped = tokens.map(mapTranPurposeToken);
-        if (mapped.some(function(c) { return c === null; })) {
+        const parsed = parseTranPurposeText(e.target.value);
+        if (parsed.invalidTokens.length > 0) {
           e.target.style.borderColor = "#c0392b";
         } else {
           e.target.style.borderColor = "";
-          loadedTransactions[idx].tranPurposeCodes = mapped;
+          loadedTransactions[idx].tranPurposeCodes = parsed.codes;
         }
         return;
       }
