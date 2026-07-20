@@ -472,8 +472,22 @@ function extractAmount(detail, item) {
   if (Array.isArray(lines) && lines.length > 0) {
     let sum = 0;
     lines.forEach(function(l) {
-      sum += getAmountValue(l.Amount != null ? l.Amount : l.amount) || 0;
+      // Confirmed from the real schema: Purchase Invoice / Expense Claim line
+      // items use "total" (post-tax) or "totalBeforeTax" — there's no "Amount"
+      // field on these at all, unlike what we'd assumed.
+      const lineValue = firstDefined(l.Total, l.total, l.TotalBeforeTax, l.totalBeforeTax, l.Amount, l.amount);
+      sum += getAmountValue(lineValue) || 0;
     });
+    // Purchase Invoices can add landed costs (freight, duty, etc.) on top of
+    // the line totals — confirmed present in the real schema as a sibling
+    // array to Lines.
+    const landedCostLines = (detail && (detail.LandedCostLines || detail.landedCostLines)) || (item && (item.LandedCostLines || item.landedCostLines));
+    if (Array.isArray(landedCostLines) && landedCostLines.length > 0) {
+      landedCostLines.forEach(function(l) {
+        const lcValue = firstDefined(l.LandedCostAmount, l.landedCostAmount);
+        sum += getAmountValue(lcValue) || 0;
+      });
+    }
     if (sum) return Math.abs(sum);
   }
   return 0;
