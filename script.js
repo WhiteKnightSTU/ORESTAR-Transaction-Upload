@@ -742,6 +742,32 @@ async function resolveContactRecord(key, hintedEndpoint) {
 // applicable) — or a record with a unique placeholder name and no resolved
 // details if nothing could be linked at all.
 async function resolveContactInfo(detail, item, sourceLabel) {
+  // Expense Claims: the ORESTAR-facing contact should be the Payee — the
+  // vendor the employee originally paid (e.g. "FedEx Office") — resolved to
+  // its matching Supplier record, not the Employee who submitted the claim.
+  if (sourceLabel === "Expense Claim") {
+    const rawPayee = (detail && (detail.Payee || detail.payee)) || (item && (item.Payee || item.payee));
+    if (rawPayee && typeof rawPayee === "string") {
+      const supplierKey = await findSupplierKeyByName(rawPayee);
+      if (supplierKey) {
+        const supplierInfo = await resolveContactRecord(supplierKey, "supplier-form");
+        if (supplierInfo) return supplierInfo;
+      }
+      // No matching Supplier found — use the Payee text directly rather
+      // than silently falling through to the Employee, since the Payee is
+      // the one that's supposed to be the ORESTAR contact here.
+      return { name: rawPayee, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: "B", peopleId: "", recordKey: null, recordEndpoint: null };
+    }
+    // No Payee text at all — fall back to whoever paid (Employee), since
+    // that's still better than nothing.
+    const employeeRef = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
+    if (employeeRef) {
+      const key = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
+      const resolved = await resolveContactRecord(key, null);
+      if (resolved) return resolved;
+    }
+  }
+
   const employeeRefs = [
     [detail && detail.PaidBy, null],
     [detail && detail.paidBy, null],
@@ -767,11 +793,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
     [item && item.supplier, "supplier-form"],
     [item && item.contact, "contact-form"]
   ];
-  // Expense Claims are about reimbursing the Employee who incurred the
-  // cost — not whatever "Payee" the underlying purchase happened to be
-  // made out to. Employee takes priority for that source; everything else
-  // keeps the original customer/supplier/contact-first order.
-  const refPairs = sourceLabel === "Expense Claim" ? employeeRefs.concat(otherRefs) : otherRefs.concat(employeeRefs);
+  const refPairs = otherRefs.concat(employeeRefs);
 
   let resolvedInfo = null;
   for (let i = 0; i < refPairs.length; i++) {
@@ -790,10 +812,8 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   }
 
   if (resolvedInfo) {
-    // Employee records tend to have thinner data than Suppliers (per what
-    // we've already confirmed works well there) — if a Supplier exists
-    // with the exact same name, prefer that richer record's details for
-    // the actual XML export, while keeping the resolved name itself as-is.
+    // For non-Expense-Claim sources resolved via Employee, still prefer a
+    // matching Supplier's richer data if one exists.
     if (resolvedInfo.recordEndpoint === "employee-form") {
       const supplierKey = await findSupplierKeyByName(resolvedInfo.name);
       if (supplierKey && supplierKey !== resolvedInfo.recordKey) {
