@@ -674,6 +674,18 @@ async function findSupplierKeyByName(name) {
   return match ? (match.key || match.Key) : null;
 }
 
+// For Expense Claims: ORESTAR wants both the vendor (contact-id, already
+// resolved via Payee) AND the employee who was reimbursed (expend-id,
+// documented in the XSD as "Personal Expenditure Id from Address Book").
+// This resolves just the employee side.
+async function resolveExpendInfo(detail, item) {
+  const ref = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
+  if (!ref) return null;
+  const key = typeof ref === "string" ? ref : (ref.key || ref.Key);
+  if (!key) return null;
+  return await resolveContactRecord(key, null);
+}
+
 async function resolveContactRecord(key, hintedEndpoint) {
   if (!key) return null;
   if (contactRecordCache[key]) return contactRecordCache[key];
@@ -925,6 +937,13 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const contactName = contactInfo.name;
     const description = extractDescription(detail, item);
 
+    let expendContactName = null;
+    let expendContactInfo = null;
+    if (sourceLabel === "Expense Claim") {
+      expendContactInfo = await resolveExpendInfo(detail, item);
+      if (expendContactInfo) expendContactName = expendContactInfo.name;
+    }
+
     if (!loggedSample[sourceLabel]) {
       console.log("[ORESTAR] Sample raw " + sourceLabel + " record (list item):", item);
       console.log("[ORESTAR] Sample raw " + sourceLabel + " record (detail):", detail);
@@ -1013,7 +1032,9 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       paymentMethod: paymentMethod,
       checkNo: checkNo,
       apInvoiceRefs: apInvoiceRefs,
-      tranPurposeCodes: tranPurposeCodes
+      tranPurposeCodes: tranPurposeCodes,
+      expendContactName: expendContactName,
+      expendContactInfo: expendContactInfo
     });
   }
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
@@ -1080,6 +1101,9 @@ function renderReview() {
   loadedTransactions.forEach(function(t, idx) {
     if (!contactsByName[t.contactName]) {
       contactsByName[t.contactName] = buildContactFromInfo(t.contactName, t.contactInfo);
+    }
+    if (t.expendContactName && !contactsByName[t.expendContactName]) {
+      contactsByName[t.expendContactName] = buildContactFromInfo(t.expendContactName, t.expendContactInfo);
     }
 
     const tr = document.createElement("tr");
@@ -1345,7 +1369,7 @@ function buildContactXml(id, c) {
     "</contact>";
 }
 
-function buildTransactionXml(id, contactId, t, associatedTrans) {
+function buildTransactionXml(id, contactId, t, associatedTrans, expendId) {
   const assocXml = (associatedTrans && associatedTrans.length > 0)
     ? associatedTrans.map(function(a) {
         return "<associated-tran><id>" + escapeXml(a.id) + "</id><complete>" + (a.complete ? "Y" : "N") + "</complete></associated-tran>";
@@ -1357,6 +1381,7 @@ function buildTransactionXml(id, contactId, t, associatedTrans) {
   return "<transaction id=\"" + escapeXml(id) + "\">" +
     "<operation><add>true</add></operation>" +
     "<contact-id>" + escapeXml(contactId) + "</contact-id>" +
+    (expendId ? "<expend-id>" + escapeXml(expendId) + "</expend-id>" : "") +
     "<type>" + t.typeCode + "</type>" +
     "<sub-type>" + t.subCode + "</sub-type>" +
     purposeXml +
@@ -1398,7 +1423,7 @@ document.getElementById("generateBtn").addEventListener("click", function() {
   const contactXmlParts = [];
   Object.entries(contactsByName).forEach(function(entry) {
     const name = entry[0], c = entry[1];
-    const isUsed = loadedTransactions.some(function(t) { return t.contactName === name; });
+    const isUsed = loadedTransactions.some(function(t) { return t.contactName === name || t.expendContactName === name; });
     if (!isUsed) return;
     const id = "C" + stamp + "-" + (contactCounter++);
     contactIdByName[name] = id;
@@ -1428,7 +1453,8 @@ document.getElementById("generateBtn").addEventListener("click", function() {
         }
       });
     }
-    return buildTransactionXml(localTranIds[i], contactIdByName[t.contactName], t, associatedTrans);
+    const expendId = t.expendContactName ? contactIdByName[t.expendContactName] : null;
+    return buildTransactionXml(localTranIds[i], contactIdByName[t.contactName], t, associatedTrans, expendId);
   });
 
   const apWarningText = unlinkedApWarnings.length > 0
