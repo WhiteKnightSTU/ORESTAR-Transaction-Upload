@@ -891,7 +891,13 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       console.warn("[ORESTAR] No date field matched for " + sourceLabel + " " + key + " — check the sample record above for the real field name.");
     }
     if (!amount) {
-      console.warn("[ORESTAR] No amount field matched for " + sourceLabel + " " + key + " (resolved to 0) — check the sample record above for the real field name.");
+      console.warn("[ORESTAR] No amount field matched for " + sourceLabel + " " + key + " (resolved to 0).");
+      console.log("[ORESTAR] " + sourceLabel + " " + key + " — ALL top-level field names:", Object.keys(detail || {}));
+      const linesForDebug = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
+      if (Array.isArray(linesForDebug) && linesForDebug.length > 0) {
+        console.log("[ORESTAR] " + sourceLabel + " " + key + " — Lines[0] full content:", linesForDebug[0]);
+        console.log("[ORESTAR] " + sourceLabel + " " + key + " — Lines[0] field names:", Object.keys(linesForDebug[0] || {}));
+      }
     }
 
     let typeCode, subCode;
