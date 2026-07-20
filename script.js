@@ -179,7 +179,7 @@ let resolvedGuids = {
   contactType: null,
   notEmployed: null,
   selfEmployed: null,
-  peopleId: null,
+  contactId: null,
   tranPurposeCandidates: []
 };
 
@@ -246,7 +246,7 @@ async function resolveFieldGuids() {
   const contactTypeMatches = findByName(cfg.CONTACT_TYPE_FIELD_NAME || "");
   const notEmployedMatches = findByName(cfg.NOT_EMPLOYED_FIELD_NAME || "");
   const selfEmployedMatches = findByName(cfg.SELF_EMPLOYED_FIELD_NAME || "");
-  const peopleIdMatches = findByName(cfg.PEOPLE_ID_FIELD_NAME || "");
+  const contactIdMatches = findByName(cfg.CONTACT_ID_FIELD_NAME || "");
   const tranPurposeMatches = findByName(cfg.TRAN_PURPOSE_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
@@ -269,7 +269,7 @@ async function resolveFieldGuids() {
     contactType: guidOf(contactTypeMatches[0]),
     notEmployed: guidOf(notEmployedMatches[0]),
     selfEmployed: guidOf(selfEmployedMatches[0]),
-    peopleId: guidOf(peopleIdMatches[0]),
+    contactId: guidOf(contactIdMatches[0]),
     tranPurposeCandidates: tranPurposeMatches.map(guidOf).filter(Boolean)
   };
 
@@ -284,7 +284,7 @@ async function resolveFieldGuids() {
     (resolvedGuids.transactionId ? "✓" : "✗") + " Transaction ID (\"" + (cfg.TRANSACTION_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.transactionId ? "" : " — not found"),
     (resolvedGuids.notEmployed ? "✓" : "✗") + " Not Employed (\"" + (cfg.NOT_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.notEmployed ? "" : " — not found"),
     (resolvedGuids.selfEmployed ? "✓" : "✗") + " Self-Employed (\"" + (cfg.SELF_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.selfEmployed ? "" : " — not found"),
-    (resolvedGuids.peopleId ? "✓" : "✗") + " People ID (\"" + (cfg.PEOPLE_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.peopleId ? "" : " — not found (optional)"),
+    (resolvedGuids.contactId ? "✓" : "✗") + " Contact ID (\"" + (cfg.CONTACT_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.contactId ? "" : " — not found (optional)"),
     (resolvedGuids.tranPurposeCandidates.length > 0 ? "✓" : "✗") + " Transaction Purpose (\"" + (cfg.TRAN_PURPOSE_FIELD_NAME || "") + "\") — " + resolvedGuids.tranPurposeCandidates.length + " field(s) found (optional)",
     (resolvedGuids.occupation ? "✓" : "✗") + " Occupation (\"" + (cfg.OCCUPATION_FIELD_NAME || "") + "\")" + (resolvedGuids.occupation ? "" : " — not found"),
     (resolvedGuids.employerName ? "✓" : "✗") + " Employer Name (\"" + (cfg.EMPLOYER_NAME_FIELD_NAME || "") + "\")" + (resolvedGuids.employerName ? "" : " — not found"),
@@ -754,7 +754,7 @@ async function resolveContactRecord(key, hintedEndpoint) {
         employerState: employerState,
         employmentStatus: employmentStatus,
         type: mapContactTypeText(getCustomFieldValue(rec, resolvedGuids.contactType, "text")),
-        peopleId: getCustomFieldValue(rec, resolvedGuids.peopleId, "number") || "",
+        contactId: getCustomFieldValue(rec, resolvedGuids.contactId, "text") || "",
         recordKey: key,
         recordEndpoint: endpoints[i]
       };
@@ -786,7 +786,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
       // No matching Supplier found — use the Payee text directly rather
       // than silently falling through to the Employee, since the Payee is
       // the one that's supposed to be the ORESTAR contact here.
-      return { name: rawPayee, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: "B", peopleId: "", recordKey: null, recordEndpoint: null };
+      return { name: rawPayee, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: "B", contactId: "", recordKey: null, recordEndpoint: null };
     }
     // No Payee text at all — fall back to whoever paid (Employee), since
     // that's still better than nothing.
@@ -836,7 +836,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) { resolvedInfo = { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null }; break; }
+    if (inlineName) { resolvedInfo = { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null }; break; }
     const resolved = await resolveContactRecord(key, hint);
     if (resolved) { resolvedInfo = resolved; break; }
   }
@@ -862,7 +862,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
     if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
-      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
+      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
     }
   }
 
@@ -871,7 +871,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   // multiple different blank transactions don't get merged into a single
   // contact entry (editing one would otherwise silently edit them all).
   const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, peopleId: "", recordKey: null, recordEndpoint: null };
+  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
 }
 
 // UNTESTED against live data — no confirmed field names for how Manager
@@ -1201,7 +1201,7 @@ function guessContact(name) {
     committeeName: "",
     street1: "", city: "", state: "", zip: "", county: "",
     occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null,
-    peopleId: "", recordKey: null, recordEndpoint: null
+    contactId: "", recordKey: null, recordEndpoint: null
   };
 }
 
@@ -1210,6 +1210,22 @@ function guessContact(name) {
 // Customer/Supplier/Employee record wherever we actually have it — type,
 // occupation, and employer info no longer need to be guessed or hand-typed
 // when Manager already has them.
+// Confirmed with the ORESTAR admin directly: contact matching/dedup is done
+// by the contact/@id attribute itself, not by data-matching as the older SOS
+// doc implied. That means the id MUST be the same every time the same person
+// is filed, not freshly generated per file. Solved without needing to store
+// or look anything up: derive it deterministically from the linked Manager
+// record's own permanent key (stripped of hyphens, truncated to the schema's
+// 30-char limit) — the same Customer/Supplier/Employee record always
+// produces the same id, automatically, forever. A manually-entered "People
+// ID" (if you have one from before this tool existed) takes priority over
+// the derived one, for migrating pre-existing ORESTAR contacts.
+function deriveStableContactId(c) {
+  if (c.contactId) return String(c.contactId).trim();
+  if (c.recordKey) return String(c.recordKey).replace(/-/g, "").slice(0, 30);
+  return null;
+}
+
 function buildContactFromInfo(name, info) {
   const base = guessContact(name);
   if (!info) return base;
@@ -1235,7 +1251,7 @@ function buildContactFromInfo(name, info) {
   if (info.city) base.city = info.city;
   if (info.state) base.state = info.state;
   if (info.zip) base.zip = info.zip;
-  if (info.peopleId) base.peopleId = info.peopleId;
+  if (info.contactId) base.contactId = info.contactId;
   if (info.recordKey) { base.recordKey = info.recordKey; base.recordEndpoint = info.recordEndpoint; }
   return base;
 }
@@ -1288,7 +1304,7 @@ function renderContacts() {
         '<div><label>Employer State</label><input data-name="' + escapeXml(name) + '" data-field="employerState" maxlength="2" value="' + escapeXml(c.employerState) + '"></div>' +
       "</div>" +
       '<div class="row">' +
-        '<div><label>ORESTAR People ID <span class="hint">Your own record only — ORESTAR auto-matches contacts by name/type on its own, so this isn\'t needed to avoid duplicates, just handy for your own tracking.</span></label><input data-name="' + escapeXml(name) + '" data-field="peopleId" value="' + escapeXml(c.peopleId) + '"></div>' +
+        '<div><label>Contact ID <span class="hint">The ID ORESTAR matches this contact on. Auto-filled if blank (derived from the Manager record) — edit here or directly in Manager to reconcile with an existing ORESTAR ID; either way, "Save Contact IDs to Manager" keeps this in sync.</span></label><input data-name="' + escapeXml(name) + '" data-field="contactId" value="' + escapeXml(c.contactId) + '"></div>' +
       "</div>";
     container.appendChild(card);
   });
@@ -1303,32 +1319,36 @@ function renderContacts() {
   });
 }
 
-document.getElementById("savePeopleIdsBtn").addEventListener("click", async function() {
-  const el = document.getElementById("peopleIdStatus");
-  if (!resolvedGuids.peopleId) {
-    el.textContent = "The \"ORESTAR People ID\" custom field wasn't found — create it in Manager (Number-type, on Customer/Supplier/Employee) and click \"Load Accounts & Resolve Fields\" again first.";
+document.getElementById("saveContactIdsBtn").addEventListener("click", async function() {
+  const el = document.getElementById("contactIdStatus");
+  if (!resolvedGuids.contactId) {
+    el.textContent = "The \"Contact ID\" custom field wasn't found — create it in Manager (Text-type, on Customer/Supplier/Employee) and click \"Load Accounts & Resolve Fields\" again first.";
     return;
   }
   const entries = Object.keys(contactsByName)
     .map(function(name) { return contactsByName[name]; })
-    .filter(function(c) { return c.peopleId && c.recordKey && c.recordEndpoint; });
+    .filter(function(c) { return c.recordKey && c.recordEndpoint; });
 
   if (entries.length === 0) {
-    el.textContent = "Nothing to save — fill in a People ID for a contact that resolved to an actual Customer/Supplier/Employee record first (manually-typed contact names with no linked record can't be saved back).";
+    el.textContent = "Nothing to save — no contacts resolved to an actual Customer/Supplier/Employee record (manually-typed contact names with no linked record can't be saved back).";
     return;
   }
 
-  el.textContent = "Saving " + entries.length + " People ID(s)…";
+  el.textContent = "Saving " + entries.length + " Contact ID(s)…";
   let succeeded = 0;
+  let unchanged = 0;
   const failures = [];
   for (let i = 0; i < entries.length; i++) {
     const c = entries[i];
-    if (!/^\d+$/.test(String(c.peopleId).trim())) {
-      failures.push(c.recordKey + ": People ID must be a plain number (this field is Number-type in Manager)");
-      continue;
-    }
+    // Uses whatever's already in the Contact ID field if present; otherwise
+    // derives one from the record and writes it, so the field ends up
+    // populated either way and reflects exactly what's used in the XML.
+    const finalId = deriveStableContactId(c);
+    if (!finalId) { failures.push(c.recordKey + ": couldn't derive an ID (no record key)"); continue; }
+    if (c.contactId === finalId) { unchanged++; continue; } // already correct in Manager, skip the write
     try {
-      await safeSetCustomField("/" + c.recordEndpoint, c.recordKey, resolvedGuids.peopleId, "number", Number(c.peopleId));
+      await safeSetCustomField("/" + c.recordEndpoint, c.recordKey, resolvedGuids.contactId, "text", finalId);
+      c.contactId = finalId;
       succeeded++;
     } catch (e) {
       failures.push(c.recordKey + ": " + e.message);
@@ -1336,9 +1356,9 @@ document.getElementById("savePeopleIdsBtn").addEventListener("click", async func
   }
 
   if (failures.length === 0) {
-    el.textContent = "Saved " + succeeded + " People ID(s) to Manager. They'll auto-fill next time you load these contacts.";
+    el.textContent = "Saved " + succeeded + " Contact ID(s) to Manager (" + unchanged + " already up to date). They'll auto-fill next time you load these contacts.";
   } else {
-    el.textContent = "Saved " + succeeded + " of " + entries.length + ". Failures:\n" + failures.join("\n");
+    el.textContent = "Saved " + succeeded + " of " + (entries.length - unchanged) + " needed. Failures:\n" + failures.join("\n");
   }
 });
 
@@ -1440,7 +1460,13 @@ document.getElementById("generateBtn").addEventListener("click", function() {
     const name = entry[0], c = entry[1];
     const isUsed = loadedTransactions.some(function(t) { return t.contactName === name || t.expendContactName === name; });
     if (!isUsed) return;
-    const id = "C" + stamp + "-" + (contactCounter++);
+    // Stable ID (same person → same id, every filing, forever) when this
+    // contact resolved from an actual Manager record or has a manually-set
+    // Contact ID. Only manually-typed contacts with no linked record at all
+    // fall back to a fresh per-file id, since there's no stable source to
+    // derive one from — these should be rare given the placeholder-name
+    // validation earlier in this function.
+    const id = deriveStableContactId(c) || ("C" + stamp + "-" + (contactCounter++));
     contactIdByName[name] = id;
     contactXmlParts.push(buildContactXml(id, c));
   });

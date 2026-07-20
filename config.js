@@ -38,13 +38,14 @@ const ORESTAR_CONFIG = {
   NOT_EMPLOYED_FIELD_NAME: "Not Employed",
   SELF_EMPLOYED_FIELD_NAME: "Self-Employed",
 
-  // Optional — for your own record-keeping only. ORESTAR's XML format has
-  // no way to reference an existing person from a prior filing (confirmed
-  // against the actual XSD), so this does NOT prevent ORESTAR from creating
-  // a new person record on each upload. It just gives you a place to note
-  // down whatever ID ORESTAR shows you, the same way Transaction ID works.
-  // Leave blank if you haven't created this custom field.
-  PEOPLE_ID_FIELD_NAME: "ORESTAR People ID",
+  // Text-type field on Customer/Supplier/Employee holding the ID ORESTAR
+  // uses to match this contact across filings — confirmed directly with the
+  // ORESTAR admin that matching is done by contact/@id, not by data. If this
+  // field has a value, that value is always used. If blank, the tool derives
+  // one automatically from the Manager record and writes it back here, so
+  // the field stays populated and can be manually edited/reconciled in
+  // Manager at any time (edits are picked up next time this tool runs).
+  CONTACT_ID_FIELD_NAME: "Contact ID",
 
   // Text-type field, same placement pattern as Payment Method — holds one
   // or more single-letter ORESTAR purpose codes (comma-separated if more
