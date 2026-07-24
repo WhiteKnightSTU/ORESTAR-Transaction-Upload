@@ -1090,9 +1090,13 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
     }
 
     const alreadyDownloaded = getCustomFieldValue(detail, downloadedFieldId, "number");
-    if (alreadyDownloaded !== undefined && alreadyDownloaded !== null && alreadyDownloaded !== "") continue;
+    if (alreadyDownloaded !== undefined && alreadyDownloaded !== null && alreadyDownloaded !== "") {
+      console.log("[ORESTAR] Payslip " + key + " skipped — already has a Transaction ID (" + alreadyDownloaded + ").");
+      continue;
+    }
 
     const deductions = detail.Deductions || detail.deductions || [];
+    console.log("[ORESTAR] Payslip " + key + " — " + deductions.length + " deduction line(s).");
     if (!Array.isArray(deductions) || deductions.length === 0) continue;
 
     for (let di = 0; di < deductions.length; di++) {
@@ -1100,10 +1104,12 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
       const itemKey = d.Item || d.item;
       if (!itemKey) continue;
       const itemName = await resolveDeductionItemName(typeof itemKey === "string" ? itemKey : (itemKey.key || itemKey.Key));
-      if (!itemName || itemName.trim().toLowerCase() !== targetItemName) continue;
+      const isMatch = itemName && itemName.trim().toLowerCase() === targetItemName;
+      console.log("[ORESTAR] Payslip " + key + " deduction[" + di + "]: item key=" + itemKey + ", resolved name=" + JSON.stringify(itemName) + ", target=" + JSON.stringify(targetItemName) + ", match=" + isMatch);
+      if (!isMatch) continue;
 
       const amount = Math.abs(getAmountValue(d.DeductionAmount != null ? d.DeductionAmount : d.deductionAmount) || 0);
-      if (!amount) continue;
+      if (!amount) { console.warn("[ORESTAR] Payslip " + key + " deduction[" + di + "] matched the item name but amount resolved to 0 — raw DeductionAmount:", d.DeductionAmount); continue; }
 
       const employeeRef = detail.employee || detail.Employee;
       let contactInfo = { name: "(no contact - " + String(key).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", peopleId: "", recordKey: null, recordEndpoint: null };
@@ -1137,6 +1143,7 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
       });
     }
   }
+  console.log("[ORESTAR] loadForgivenExpenseClaims summary: " + items.length + " payslip(s) fetched, " + results.length + " forgiveness match(es) found.");
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
 }
 
