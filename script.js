@@ -416,6 +416,56 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
   }
 });
 
+document.getElementById("testPayslipsBtn").addEventListener("click", async function() {
+  const el = document.getElementById("payslipTestResult");
+  el.innerHTML = '<span class="small">Testing…</span>';
+  const listCandidates = ["/payslips", "/pay-slips"];
+  let listData = null, workingListPath = null;
+  const attempts = [];
+  for (let i = 0; i < listCandidates.length; i++) {
+    try {
+      listData = await managerApi("GET", listCandidates[i] + "?pageSize=5");
+      workingListPath = listCandidates[i];
+      attempts.push(listCandidates[i] + " — SUCCESS");
+      break;
+    } catch (e) {
+      attempts.push(listCandidates[i] + " — " + e.message);
+    }
+  }
+  if (!listData) {
+    el.innerHTML = '<span class="small">' + escapeXml(attempts.join(" | ")) + '</span>';
+    return;
+  }
+  console.log("[ORESTAR] Payslip list raw response:", listData);
+  const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
+  const items = arrayKey ? listData[arrayKey] : [];
+  if (items.length === 0) {
+    el.innerHTML = '<span class="small">List endpoint (' + workingListPath + ') worked but returned 0 payslips.</span>';
+    return;
+  }
+  const key = items[0].key || items[0].Key;
+  const formCandidates = [workingListPath.replace(/s$/, "") + "-form", "/payslip-form", "/pay-slip-form"];
+  let detail = null, workingFormPath = null;
+  const formAttempts = [];
+  for (let i = 0; i < formCandidates.length; i++) {
+    try {
+      detail = await managerApi("GET", formCandidates[i] + "/" + key);
+      workingFormPath = formCandidates[i];
+      formAttempts.push(formCandidates[i] + " — SUCCESS");
+      break;
+    } catch (e) {
+      formAttempts.push(formCandidates[i] + " — " + e.message);
+    }
+  }
+  console.log("[ORESTAR] Payslip list item sample:", items[0]);
+  console.log("[ORESTAR] Payslip detail sample (" + workingFormPath + "):", detail);
+  if (detail) {
+    console.log("[ORESTAR] Payslip detail top-level field names:", Object.keys(detail));
+    console.log("[ORESTAR] Payslip detail as JSON string: " + JSON.stringify(detail));
+  }
+  el.innerHTML = '<span class="small">List: ' + escapeXml(attempts.join(" | ")) + '<br>Detail: ' + escapeXml(formAttempts.join(" | ")) + '<br>Check the console for the full raw structure — logged as an object, field-name list, and JSON string.</span>';
+});
+
 document.getElementById("loadAccountsBtn").addEventListener("click", async function() {
   showStatus("pending", "Resolving custom fields and loading accounts…");
   try {
@@ -1431,7 +1481,7 @@ function buildTransactionXml(id, contactId, t, associatedTrans, expendId) {
 
 let lastGeneratedFilerId = "";
 
-document.getElementById("generateBtn").addEventListener("click", function() {
+document.getElementById("generateBtn").addEventListener("click", async function() {
   const filerId = document.getElementById("resolvedFilerId").value.trim();
   if (!filerId) { showStatus("err", "Filer ID hasn't resolved yet — click \"Load Accounts & Filer ID\" above and check for errors."); return; }
   if (loadedTransactions.some(function(t) { return !t.typeCode || !t.subCode; })) {
@@ -1452,14 +1502,17 @@ document.getElementById("generateBtn").addEventListener("click", function() {
   }
   lastGeneratedFilerId = filerId;
 
+  showStatus("pending", "Generating…");
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
   const contactIdByName = {};
   let contactCounter = 1;
   const contactXmlParts = [];
-  Object.entries(contactsByName).forEach(function(entry) {
+  let autoSavedCount = 0;
+  const autoSaveFailures = [];
+  for (const entry of Object.entries(contactsByName)) {
     const name = entry[0], c = entry[1];
     const isUsed = loadedTransactions.some(function(t) { return t.contactName === name || t.expendContactName === name; });
-    if (!isUsed) return;
+    if (!isUsed) continue;
     // Stable ID (same person → same id, every filing, forever) when this
     // contact resolved from an actual Manager record or has a manually-set
     // Contact ID. Only manually-typed contacts with no linked record at all
@@ -1468,8 +1521,20 @@ document.getElementById("generateBtn").addEventListener("click", function() {
     // validation earlier in this function.
     const id = deriveStableContactId(c) || ("C" + stamp + "-" + (contactCounter++));
     contactIdByName[name] = id;
+    // Auto-save: if this contact didn't already have a Contact ID saved in
+    // Manager, write the freshly-derived one back immediately, so it's
+    // captured the first time without needing the separate Save button.
+    if (!c.contactId && c.recordKey && c.recordEndpoint && resolvedGuids.contactId) {
+      try {
+        await safeSetCustomField("/" + c.recordEndpoint, c.recordKey, resolvedGuids.contactId, "text", id);
+        c.contactId = id;
+        autoSavedCount++;
+      } catch (e) {
+        autoSaveFailures.push(name + ": " + e.message);
+      }
+    }
     contactXmlParts.push(buildContactXml(id, c));
-  });
+  }
 
   // Assign this batch's transaction IDs first, and build a lookup from each
   // Purchase Invoice's own Manager record key to its freshly-assigned file
@@ -1527,8 +1592,12 @@ document.getElementById("generateBtn").addEventListener("click", function() {
   };
   renderTxnIdTable();
   document.getElementById("txnIdSection").style.display = "block";
-  showStatus(apWarningText ? "err" : "ok",
-    "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save." + apWarningText);
+  const autoSaveText = autoSavedCount > 0 ? (" " + autoSavedCount + " new Contact ID(s) auto-saved to Manager.") : "";
+  const autoSaveFailText = autoSaveFailures.length > 0
+    ? ("\n\n⚠ " + autoSaveFailures.length + " Contact ID(s) failed to auto-save (XML still generated fine, just re-run \"Save Contact IDs to Manager\" to retry):\n" + autoSaveFailures.slice(0, 5).join("\n"))
+    : "";
+  showStatus((apWarningText || autoSaveFailText) ? "err" : "ok",
+    "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save." + autoSaveText + apWarningText + autoSaveFailText);
 });
 
 function renderTxnIdTable() {
