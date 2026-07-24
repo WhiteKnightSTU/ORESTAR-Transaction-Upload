@@ -437,6 +437,31 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
     console.log("[ORESTAR] Payslip list raw response:", listData);
     const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
     items = arrayKey ? listData[arrayKey] : [];
+
+    // Same hub-and-batch pattern discovered with /api4/custom-fields — a
+    // valid response with no flat array, just links to the real data.
+    if (items.length === 0 && (listData._links || listData.links)) {
+      const links = listData._links || listData.links;
+      console.log("[ORESTAR] Payslip response looks like a hub — _links found:", links);
+      const linkKeys = Object.keys(links).filter(function(k) { return k !== "self" && k !== "describedBy"; });
+      for (let li = 0; li < linkKeys.length; li++) {
+        const linkObj = links[linkKeys[li]];
+        if (!linkObj || !linkObj.href) continue;
+        try {
+          const batchData = await managerApi("GET", linkObj.href + (linkObj.href.indexOf("?") !== -1 ? "&" : "?") + "pageSize=1000");
+          const batchArrayKey = Object.keys(batchData).find(function(k) { return Array.isArray(batchData[k]); });
+          const batchItems = batchArrayKey ? batchData[batchArrayKey] : [];
+          console.log("[ORESTAR] Hub link \"" + linkKeys[li] + "\" (" + linkObj.href + ") returned " + batchItems.length + " item(s)");
+          if (batchItems.length > 0) {
+            items = batchItems;
+            workingListPath = linkObj.href.split("?")[0];
+            break;
+          }
+        } catch (e) {
+          console.warn("[ORESTAR] Hub link \"" + linkKeys[li] + "\" failed:", e.message);
+        }
+      }
+    }
   }
 
   // Fallback: Payslips may be nested under Pay Runs (a period/batch concept)
