@@ -777,20 +777,33 @@ async function resolveDeductionItemName(key) {
 let deductionItemListCache = null;
 async function resolveDeductionItemNameViaList(key) {
   if (deductionItemListCache === null) {
-    const listCandidates = ["/api2/payroll-deduction-items", "/api2/deduction-items", "/api4/payroll-deduction-items", "/api4/deduction-items"];
+    // Confirmed real endpoint. Kept the old guesses as fallbacks, harmless
+    // if they 404.
+    const listCandidates = ["/api4/payslip-deduction-item-batch", "/api2/payroll-deduction-items", "/api2/deduction-items", "/api4/payroll-deduction-items", "/api4/deduction-items"];
     deductionItemListCache = [];
     for (let i = 0; i < listCandidates.length; i++) {
       try {
         const data = await managerApi("GET", listCandidates[i] + "?pageSize=1000");
         const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
-        const list = arrayKey ? data[arrayKey] : [];
+        const rawList = arrayKey ? data[arrayKey] : [];
+        // Confirmed shape for -batch endpoints: each entry is
+        // { key, item: {...actual fields...} } — unwrap before reading,
+        // same pattern already used for custom field batches.
+        const list = rawList.map(function(entry) {
+          if (entry && entry.item && typeof entry.item === "object") {
+            const merged = Object.assign({}, entry.item);
+            if (!merged.key && !merged.Key) merged.key = entry.key || entry.Key;
+            return merged;
+          }
+          return entry;
+        });
         if (list.length > 0) {
-          console.log("[ORESTAR] Deduction item list found at " + listCandidates[i] + " (" + list.length + " item(s)):", list);
+          console.log("[ORESTAR] Deduction item list found at " + listCandidates[i] + " (" + list.length + " item(s), unwrapped):", list);
           deductionItemListCache = list;
           break;
         }
       } catch (e) {
-        // try next candidate
+        console.warn("[ORESTAR] " + listCandidates[i] + " failed:", e.message);
       }
     }
   }
@@ -798,6 +811,7 @@ async function resolveDeductionItemNameViaList(key) {
   if (match) {
     const name = match.Name || match.name;
     if (name) { deductionItemCache[key] = name; return name; }
+    console.warn("[ORESTAR] Deduction item " + key + " found in the list but has no Name — raw entry:", match);
   }
   return null;
 }
