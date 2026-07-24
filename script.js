@@ -424,7 +424,7 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
   const attempts = [];
   for (let i = 0; i < listCandidates.length; i++) {
     try {
-      listData = await managerApi("GET", listCandidates[i] + "?pageSize=5");
+      listData = await managerApi("GET", listCandidates[i] + "?pageSize=1000");
       workingListPath = listCandidates[i];
       attempts.push(listCandidates[i] + " — SUCCESS");
       break;
@@ -432,15 +432,56 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
       attempts.push(listCandidates[i] + " — " + e.message);
     }
   }
-  if (!listData) {
-    el.innerHTML = '<span class="small">' + escapeXml(attempts.join(" | ")) + '</span>';
-    return;
+  let items = [];
+  if (listData) {
+    console.log("[ORESTAR] Payslip list raw response:", listData);
+    const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
+    items = arrayKey ? listData[arrayKey] : [];
   }
-  console.log("[ORESTAR] Payslip list raw response:", listData);
-  const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
-  const items = arrayKey ? listData[arrayKey] : [];
+
+  // Fallback: Payslips may be nested under Pay Runs (a period/batch concept)
+  // rather than being a flat top-level list, since payroll is inherently
+  // period-based.
+  let payRunData = null, workingPayRunPath = null;
   if (items.length === 0) {
-    el.innerHTML = '<span class="small">List endpoint (' + workingListPath + ') worked but returned 0 payslips.</span>';
+    const payRunCandidates = ["/pay-runs", "/payruns", "/pay-run"];
+    for (let i = 0; i < payRunCandidates.length; i++) {
+      try {
+        payRunData = await managerApi("GET", payRunCandidates[i] + "?pageSize=1000");
+        workingPayRunPath = payRunCandidates[i];
+        attempts.push(payRunCandidates[i] + " — SUCCESS");
+        break;
+      } catch (e) {
+        attempts.push(payRunCandidates[i] + " — " + e.message);
+      }
+    }
+    if (payRunData) {
+      console.log("[ORESTAR] Pay Run list raw response:", payRunData);
+      const arrayKey = Object.keys(payRunData).find(function(k) { return Array.isArray(payRunData[k]); });
+      const payRuns = arrayKey ? payRunData[arrayKey] : [];
+      if (payRuns.length > 0) {
+        const runKey = payRuns[0].key || payRuns[0].Key;
+        const runFormCandidates = [workingPayRunPath.replace(/s$/, "") + "-form", "/pay-run-form"];
+        for (let i = 0; i < runFormCandidates.length; i++) {
+          try {
+            const runDetail = await managerApi("GET", runFormCandidates[i] + "/" + runKey);
+            console.log("[ORESTAR] Pay Run detail sample (" + runFormCandidates[i] + "):", runDetail);
+            console.log("[ORESTAR] Pay Run detail as JSON string: " + JSON.stringify(runDetail));
+            el.innerHTML = '<span class="small">No flat Payslips, but found Pay Runs (' + payRuns.length + ') — check console for the Pay Run detail structure, likely contains nested payslip data.</span>';
+            return;
+          } catch (e) {
+            attempts.push(runFormCandidates[i] + " — " + e.message);
+          }
+        }
+      } else {
+        el.innerHTML = '<span class="small">Neither /payslips nor any Pay Run endpoint returned data. Attempts:<br>' + escapeXml(attempts.join(" | ")) + '</span>';
+        return;
+      }
+    }
+  }
+
+  if (items.length === 0) {
+    el.innerHTML = '<span class="small">List endpoint (' + workingListPath + ') worked but returned 0 payslips, and no Pay Run fallback worked either. Attempts:<br>' + escapeXml(attempts.join(" | ")) + '</span>';
     return;
   }
   const key = items[0].key || items[0].Key;
