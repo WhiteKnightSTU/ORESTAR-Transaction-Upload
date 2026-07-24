@@ -50,5 +50,12 @@ const ORESTAR_CONFIG = {
   // Text-type field, same placement pattern as Payment Method — holds one
   // or more single-letter ORESTAR purpose codes (comma-separated if more
   // than one), e.g. "R" or "G, T". Optional per transaction.
-  TRAN_PURPOSE_FIELD_NAME: "Transaction Purpose"
+  TRAN_PURPOSE_FIELD_NAME: "Transaction Purpose",
+
+  // Name of the Payroll Deduction Item used for forgiving an employee's
+  // Expense Claim / Personal Expenditure reimbursement. A payslip deduction
+  // line referencing this item gets filed as a Contribution (Type C,
+  // Subtype IKP — In-Kind/Forgiven Personal Expenditure), not an
+  // Expenditure — matched by name against the deduction's linked item.
+  FORGIVEN_EXPENSE_CLAIM_ITEM_NAME: "Forgiven Expense Claim"
 };

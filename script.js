@@ -730,6 +730,35 @@ async function safeSetCustomField(formPath, key, fieldGuid, kind, value) {
   await managerApi("PUT", "/api2" + formPath + "/" + key, current);
 }
 
+// UNCONFIRMED endpoint names for the Deduction Item a payslip Deduction
+// line references — trying plausible candidates following the established
+// "-form/{key}" pattern. Cached since the same item (e.g. "Forgiven Expense
+// Claim") will be referenced repeatedly across many payslips.
+let deductionItemCache = {};
+async function resolveDeductionItemName(key) {
+  if (!key) return null;
+  if (deductionItemCache[key] !== undefined) return deductionItemCache[key];
+  const endpoints = [
+    "/api2/payroll-deduction-item-form", "/api2/deduction-item-form",
+    "/api2/pay-item-form", "/api2/payroll-item-form"
+  ];
+  for (let i = 0; i < endpoints.length; i++) {
+    try {
+      const rec = await managerApi("GET", endpoints[i] + "/" + key);
+      const name = rec.Name || rec.name;
+      if (name) {
+        deductionItemCache[key] = name;
+        return name;
+      }
+    } catch (e) {
+      // try next candidate
+    }
+  }
+  console.warn("[ORESTAR] Could not resolve deduction item " + key + " against any candidate endpoint.");
+  deductionItemCache[key] = null;
+  return null;
+}
+
 async function resolveInvoiceTransactionId(key) {
   if (invoiceTxnIdCache[key] !== undefined) return invoiceTxnIdCache[key];
   try {
@@ -1035,6 +1064,82 @@ function extractAccountRef(item, detail) {
 
 const FETCH_PAGE_SIZE = 5000;
 
+// Payslip deduction lines referencing the configured "Forgiven Expense
+// Claim" item get filed as a Contribution (Type C, Subtype IKP), not an
+// Expenditure — the employee is "contributing" by forgiving the
+// reimbursement they'd otherwise be owed. Confirmed live: Deductions[].Item
+// is a bare key to a Deduction Item record; DeductionAmount is the dollar
+// figure; "employee" (lowercase, unlike other fields on this record) is the
+// payslip's employee reference.
+async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
+  const cfg = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
+  const targetItemName = (cfg.FORGIVEN_EXPENSE_CLAIM_ITEM_NAME || "").trim().toLowerCase();
+  const results = [];
+  const listData = await managerApi("GET", "/api2/payslips?pageSize=" + FETCH_PAGE_SIZE);
+  const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
+  const items = arrayKey ? listData[arrayKey] : [];
+  const possiblyTruncated = items.length >= FETCH_PAGE_SIZE;
+
+  for (const item of items) {
+    const key = item.key || item.Key;
+    let detail;
+    try {
+      detail = await managerApi("GET", "/api2/payslip-form/" + key);
+    } catch (e) {
+      continue;
+    }
+
+    const alreadyDownloaded = getCustomFieldValue(detail, downloadedFieldId, "number");
+    if (alreadyDownloaded !== undefined && alreadyDownloaded !== null && alreadyDownloaded !== "") continue;
+
+    const deductions = detail.Deductions || detail.deductions || [];
+    if (!Array.isArray(deductions) || deductions.length === 0) continue;
+
+    for (let di = 0; di < deductions.length; di++) {
+      const d = deductions[di];
+      const itemKey = d.Item || d.item;
+      if (!itemKey) continue;
+      const itemName = await resolveDeductionItemName(typeof itemKey === "string" ? itemKey : (itemKey.key || itemKey.Key));
+      if (!itemName || itemName.trim().toLowerCase() !== targetItemName) continue;
+
+      const amount = Math.abs(getAmountValue(d.DeductionAmount != null ? d.DeductionAmount : d.deductionAmount) || 0);
+      if (!amount) continue;
+
+      const employeeRef = detail.employee || detail.Employee;
+      let contactInfo = { name: "(no contact - " + String(key).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", peopleId: "", recordKey: null, recordEndpoint: null };
+      if (employeeRef) {
+        const empKey = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
+        const resolved = await resolveContactRecord(empKey, "employee-form");
+        if (resolved) contactInfo = resolved;
+      }
+
+      const tranDate = dateOnly(detail.Date || item.Date || item.date);
+
+      results.push({
+        source: "Payslip (Forgiven Expense Claim)",
+        key: key,
+        formPath: "/payslip-form",
+        date: tranDate,
+        enteredDate: localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp),
+        accountName: "(payroll — not account-based)",
+        amount: amount,
+        contactName: contactInfo.name,
+        contactInfo: contactInfo,
+        typeCode: "C",
+        subCode: "IKP",
+        description: d.Description || d.description || "",
+        paymentMethod: "",
+        checkNo: "",
+        tranPurposeCodes: [],
+        expendContactName: null,
+        expendContactInfo: null,
+        apInvoiceRefs: []
+      });
+    }
+  }
+  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
+}
+
 async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
   const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
@@ -1201,8 +1306,14 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
     } catch (e) {
       console.warn("[ORESTAR] Purchase Invoices fetch failed (endpoint may not match your version):", e.message);
     }
+    let payslipResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
+    try {
+      payslipResults = await loadForgivenExpenseClaims(resolvedGuids.transactionId, selectedKeys);
+    } catch (e) {
+      console.warn("[ORESTAR] Payslips fetch failed:", e.message);
+    }
 
-    loadedTransactions = receiptResult.results.concat(paymentResult.results, expenseClaimResults.results, purchaseInvoiceResults.results);
+    loadedTransactions = receiptResult.results.concat(paymentResult.results, expenseClaimResults.results, purchaseInvoiceResults.results, payslipResults.results);
 
     if (loadedTransactions.length === 0) {
       showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check the resolved-fields status above, and that the account picker matches what you expect.");
@@ -1212,12 +1323,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 
     renderReview();
 
-    if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated || expenseClaimResults.possiblyTruncated || purchaseInvoiceResults.possiblyTruncated) {
+    if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated || expenseClaimResults.possiblyTruncated || purchaseInvoiceResults.possiblyTruncated || payslipResults.possiblyTruncated) {
       showStatus("err",
         "Loaded " + loadedTransactions.length + " transaction(s), but one or more sources are right at the fetch limit (" + FETCH_PAGE_SIZE + "). " +
         "Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing.");
     } else {
-      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) — " + receiptResult.totalFetched + " receipt(s), " + paymentResult.totalFetched + " payment(s), " + expenseClaimResults.totalFetched + " expense claim(s), " + purchaseInvoiceResults.totalFetched + " purchase invoice(s) checked in total. Review below before generating XML.");
+      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) — " + receiptResult.totalFetched + " receipt(s), " + paymentResult.totalFetched + " payment(s), " + expenseClaimResults.totalFetched + " expense claim(s), " + purchaseInvoiceResults.totalFetched + " purchase invoice(s), " + payslipResults.totalFetched + " payslip(s) checked in total. Review below before generating XML.");
     }
   } catch (err) {
     showStatus("err", "Failed to load: " + err.message);
