@@ -419,7 +419,7 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
 document.getElementById("testPayslipsBtn").addEventListener("click", async function() {
   const el = document.getElementById("payslipTestResult");
   el.innerHTML = '<span class="small">Testing…</span>';
-  const listCandidates = ["/payslips", "/pay-slips"];
+  const listCandidates = ["/api2/payslips", "/api2/pay-slips", "/api4/payslips", "/api4/pay-slips"];
   let listData = null, workingListPath = null;
   const attempts = [];
   for (let i = 0; i < listCandidates.length; i++) {
@@ -469,7 +469,7 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
   // period-based.
   let payRunData = null, workingPayRunPath = null;
   if (items.length === 0) {
-    const payRunCandidates = ["/pay-runs", "/payruns", "/pay-run"];
+    const payRunCandidates = ["/api2/pay-runs", "/api2/payruns", "/api2/pay-run", "/api4/pay-runs", "/api4/payruns"];
     for (let i = 0; i < payRunCandidates.length; i++) {
       try {
         payRunData = await managerApi("GET", payRunCandidates[i] + "?pageSize=1000");
@@ -486,7 +486,7 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
       const payRuns = arrayKey ? payRunData[arrayKey] : [];
       if (payRuns.length > 0) {
         const runKey = payRuns[0].key || payRuns[0].Key;
-        const runFormCandidates = [workingPayRunPath.replace(/s$/, "") + "-form", "/pay-run-form"];
+        const runFormCandidates = [workingPayRunPath.replace(/s$/, "") + "-form", "/api2/pay-run-form", "/api4/pay-run-form"];
         for (let i = 0; i < runFormCandidates.length; i++) {
           try {
             const runDetail = await managerApi("GET", runFormCandidates[i] + "/" + runKey);
@@ -510,7 +510,7 @@ document.getElementById("testPayslipsBtn").addEventListener("click", async funct
     return;
   }
   const key = items[0].key || items[0].Key;
-  const formCandidates = [workingListPath.replace(/s$/, "") + "-form", "/payslip-form", "/pay-slip-form"];
+  const formCandidates = [workingListPath.replace(/s$/, "") + "-form", "/api2/payslip-form", "/api2/pay-slip-form", "/api4/payslip-form"];
   let detail = null, workingFormPath = null;
   const formAttempts = [];
   for (let i = 0; i < formCandidates.length; i++) {
