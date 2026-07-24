@@ -135,22 +135,27 @@ async function postMessageWithResponse(message) {
       if (d && d.type && d.type.endsWith("-response") && d.requestId === requestId) {
         clearTimeout(t);
         window.removeEventListener("message", onMessage);
+        // Status is checked FIRST and always wins — a real 4xx/5xx is a
+        // genuine failure no matter what d.error's text says. Manager's own
+        // proxy throws the identical "Unexpected end of JSON input" error
+        // internally for BOTH a successful empty-body write (204) AND a
+        // genuinely empty-body 404 — those are indistinguishable by error
+        // text alone, so status has to be the deciding factor, not text.
+        if (d.status && d.status >= 400) {
+          reject(new Error("HTTP " + d.status + (d.body ? ": " + JSON.stringify(d.body) : (d.error ? ": " + d.error : ""))));
+          return;
+        }
         if (d.error) {
-          // Manager's own proxy appears to call response.json() unconditionally.
-          // A successful write (PUT/PATCH) commonly returns 204 No Content —
-          // no body at all — which throws exactly this standard browser error
-          // even though the underlying write succeeded. Treat it as success
-          // rather than a real failure, since the error text itself is
-          // diagnostic of "empty body," not of the request having failed.
-          if (String(d.error).indexOf("Unexpected end of JSON input") !== -1) {
+          const looksLikeEmptyBodyParse = String(d.error).indexOf("Unexpected end of JSON input") !== -1;
+          const isWriteMethod = message.method === "PUT" || message.method === "PATCH" || message.method === "POST";
+          if (looksLikeEmptyBodyParse && isWriteMethod) {
             resolve(d.body || {});
             return;
           }
           reject(new Error(d.error));
           return;
         }
-        if (d.status && d.status >= 400) reject(new Error("HTTP " + d.status + ": " + JSON.stringify(d.body)));
-        else resolve(d.body);
+        resolve(d.body);
       }
     }
     window.addEventListener("message", onMessage);
