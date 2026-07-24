@@ -740,8 +740,11 @@ async function resolveDeductionItemName(key) {
   if (deductionItemCache[key] !== undefined) return deductionItemCache[key];
   const endpoints = [
     "/api2/payroll-deduction-item-form", "/api2/deduction-item-form",
-    "/api2/pay-item-form", "/api2/payroll-item-form"
+    "/api2/pay-item-form", "/api2/payroll-item-form",
+    "/api4/payroll-deduction-item-form", "/api4/deduction-item-form",
+    "/api4/pay-item-form", "/api4/payroll-item-form"
   ];
+  const attempts = [];
   for (let i = 0; i < endpoints.length; i++) {
     try {
       const rec = await managerApi("GET", endpoints[i] + "/" + key);
@@ -750,12 +753,47 @@ async function resolveDeductionItemName(key) {
         deductionItemCache[key] = name;
         return name;
       }
+      attempts.push(endpoints[i] + " — reached but no Name field");
     } catch (e) {
-      // try next candidate
+      attempts.push(endpoints[i] + " — " + e.message);
     }
   }
-  console.warn("[ORESTAR] Could not resolve deduction item " + key + " against any candidate endpoint.");
+
+  // Fallback: fetch the full list once (cached) and match by key client-side,
+  // in case none of the direct "-form/{key}" guesses are the real endpoint.
+  const listName = await resolveDeductionItemNameViaList(key);
+  if (listName) return listName;
+
+  console.warn("[ORESTAR] Could not resolve deduction item " + key + " against any candidate endpoint or list. Attempts:\n" + attempts.join("\n"));
   deductionItemCache[key] = null;
+  return null;
+}
+
+let deductionItemListCache = null;
+async function resolveDeductionItemNameViaList(key) {
+  if (deductionItemListCache === null) {
+    const listCandidates = ["/api2/payroll-deduction-items", "/api2/deduction-items", "/api4/payroll-deduction-items", "/api4/deduction-items"];
+    deductionItemListCache = [];
+    for (let i = 0; i < listCandidates.length; i++) {
+      try {
+        const data = await managerApi("GET", listCandidates[i] + "?pageSize=1000");
+        const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
+        const list = arrayKey ? data[arrayKey] : [];
+        if (list.length > 0) {
+          console.log("[ORESTAR] Deduction item list found at " + listCandidates[i] + " (" + list.length + " item(s)):", list);
+          deductionItemListCache = list;
+          break;
+        }
+      } catch (e) {
+        // try next candidate
+      }
+    }
+  }
+  const match = deductionItemListCache.find(function(it) { return (it.key || it.Key) === key; });
+  if (match) {
+    const name = match.Name || match.name;
+    if (name) { deductionItemCache[key] = name; return name; }
+  }
   return null;
 }
 
