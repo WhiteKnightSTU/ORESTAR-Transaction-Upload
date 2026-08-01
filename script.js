@@ -803,7 +803,7 @@ async function resolveExpendInfo(detail, item) {
   }
   const key = typeof ref === "string" ? ref : (ref.key || ref.Key);
   if (!key) return null;
-  return await resolveContactRecord(key, null);
+  return await resolveContactRecord(key, "employee-form");
 }
 
 async function resolveContactRecord(key, hintedEndpoint) {
@@ -898,16 +898,16 @@ async function resolveContactInfo(detail, item, sourceLabel) {
         return { name: employeeRef, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
       }
       const key = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
-      const resolved = await resolveContactRecord(key, null);
+      const resolved = await resolveContactRecord(key, "employee-form");
       if (resolved) return resolved;
     }
   }
 
   const employeeRefs = [
-    [detail && detail.PaidBy, null],
-    [detail && detail.paidBy, null],
-    [item && item.PaidBy, null],
-    [item && item.paidBy, null],
+    [detail && detail.PaidBy, "employee-form"],
+    [detail && detail.paidBy, "employee-form"],
+    [item && item.PaidBy, "employee-form"],
+    [item && item.paidBy, "employee-form"],
     [detail && detail.recipient, null],
     [detail && detail.Recipient, null],
     [item && item.recipient, null],
@@ -1634,14 +1634,19 @@ function buildTransactionXml(id, contactId, t, associatedTrans, expendId) {
 let lastGeneratedFilerId = "";
 
 document.getElementById("generateBtn").addEventListener("click", async function() {
+  console.log("[ORESTAR] Generate clicked. loadedTransactions.length =", loadedTransactions.length);
   const filerId = document.getElementById("resolvedFilerId").value.trim();
+  console.log("[ORESTAR] Filer ID field value:", JSON.stringify(filerId));
   if (!filerId) { showStatus("err", "Filer ID hasn't resolved yet — click \"Load Accounts & Filer ID\" above and check for errors."); return; }
-  if (loadedTransactions.some(function(t) { return !t.typeCode || !t.subCode; })) {
+  const badTypeSubtype = loadedTransactions.filter(function(t) { return !t.typeCode || !t.subCode; });
+  if (badTypeSubtype.length > 0) {
+    console.log("[ORESTAR] Blocked: " + badTypeSubtype.length + " transaction(s) missing Type/Sub-type:", badTypeSubtype);
     showStatus("err", "Every transaction needs a Type and Sub-type — check the table above.");
     return;
   }
   const unfilledContacts = loadedTransactions.filter(function(t) { return /^\(no contact - /.test(t.contactName); });
   if (unfilledContacts.length > 0) {
+    console.log("[ORESTAR] Blocked: " + unfilledContacts.length + " placeholder contact(s):", unfilledContacts);
     showStatus("err", unfilledContacts.length + " transaction(s) still have a placeholder Contact Name (starts with \"(no contact - \") instead of a real name — fix those in the Contact Name column above before generating. These weren't linked to a Customer/Supplier/Contact record in Manager, so they need a name entered manually.");
     return;
   }
@@ -1649,9 +1654,11 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     return (t.tranPurposeCodes || []).some(function(code) { return TRAN_PURPOSE_CODES[code] && TRAN_PURPOSE_CODES[code].requiresDescription; }) && !t.description;
   });
   if (missingRequiredDescription.length > 0) {
+    console.log("[ORESTAR] Blocked: " + missingRequiredDescription.length + " transaction(s) missing required description:", missingRequiredDescription);
     showStatus("err", missingRequiredDescription.length + " transaction(s) have a Transaction Purpose code (G or T) that requires a Description, but the Description is blank — fill those in above before generating.");
     return;
   }
+  console.log("[ORESTAR] All validation passed, proceeding to build XML…");
   lastGeneratedFilerId = filerId;
 
   showStatus("pending", "Generating…");
