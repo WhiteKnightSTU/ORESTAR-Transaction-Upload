@@ -313,6 +313,19 @@ function showMarkStatus(kind, message) {
   el.textContent = message;
 }
 
+// Manager returns a plain string for a customer/supplier/employee reference
+// in TWO different cases: (1) a real link to an existing record — a GUID
+// key, or (2) free text typed in with no actual link — the name itself.
+// Both come through as the same JS type, so we can't tell them apart by
+// typeof alone. Confirmed live: treating every string as a lookup key caused
+// dozens of wasted, always-404 API calls per business (e.g.
+// /api2/customer-form/Josie%20Alxenander). Only strings matching the actual
+// GUID format get treated as keys; anything else is used directly as a name.
+const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isGuidLike(str) {
+  return typeof str === "string" && GUID_PATTERN.test(str.trim());
+}
+
 function escapeXml(str) {
   return String(str == null ? "" : str).replace(/[<>&'"]/g, function(c) {
     return { "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c];
@@ -785,6 +798,9 @@ async function findSupplierKeyByName(name) {
 async function resolveExpendInfo(detail, item) {
   const ref = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
   if (!ref) return null;
+  if (typeof ref === "string" && !isGuidLike(ref)) {
+    return { name: ref, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+  }
   const key = typeof ref === "string" ? ref : (ref.key || ref.Key);
   if (!key) return null;
   return await resolveContactRecord(key, null);
@@ -878,6 +894,9 @@ async function resolveContactInfo(detail, item, sourceLabel) {
     // that's still better than nothing.
     const employeeRef = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
     if (employeeRef) {
+      if (typeof employeeRef === "string" && !isGuidLike(employeeRef)) {
+        return { name: employeeRef, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+      }
       const key = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
       const resolved = await resolveContactRecord(key, null);
       if (resolved) return resolved;
@@ -917,7 +936,11 @@ async function resolveContactInfo(detail, item, sourceLabel) {
     if (!ref) continue;
     let key = null, inlineName = null;
     if (typeof ref === "string") {
-      key = ref;
+      if (isGuidLike(ref)) {
+        key = ref;
+      } else {
+        inlineName = ref; // free text, not a real link — use directly, don't look it up
+      }
     } else if (typeof ref === "object") {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
@@ -1055,9 +1078,13 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
       const employeeRef = detail.employee || detail.Employee;
       let contactInfo = { name: "(no contact - " + String(key).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", peopleId: "", recordKey: null, recordEndpoint: null };
       if (employeeRef) {
-        const empKey = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
-        const resolved = await resolveContactRecord(empKey, "employee-form");
-        if (resolved) contactInfo = resolved;
+        if (typeof employeeRef === "string" && !isGuidLike(employeeRef)) {
+          contactInfo = Object.assign({}, contactInfo, { name: employeeRef });
+        } else {
+          const empKey = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
+          const resolved = await resolveContactRecord(empKey, "employee-form");
+          if (resolved) contactInfo = resolved;
+        }
       }
 
       const tranDate = dateOnly(detail.Date || item.Date || item.date);
