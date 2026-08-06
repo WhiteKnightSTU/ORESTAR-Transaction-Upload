@@ -629,7 +629,30 @@ async function safeSetCustomField(formPath, key, fieldGuid, kind, value) {
   } else {
     current.CustomFields2 = cf;
   }
-  await managerApi("PUT", "/api2" + formPath + "/" + key, current);
+
+  try {
+    await managerApi("PUT", "/api2" + formPath + "/" + key, current);
+    return;
+  } catch (e) {
+    // The full-object echo-back is the safe default (preserves every field
+    // exactly as fetched) — but some record types apparently reject it,
+    // likely because the GET response includes computed/read-only metadata
+    // (is*/has*/can*/obsolete_* flags, timestamps, etc.) that the write
+    // endpoint doesn't accept back. Retry once with those specific
+    // patterns stripped — still sending back every real business field
+    // (Date, Amount, Lines, Customer, everything not matching these
+    // patterns), never falling back to a bare partial write like the one
+    // that caused actual data loss earlier.
+    console.warn("[ORESTAR] Full-object write failed for " + formPath + "/" + key + ", retrying with computed fields stripped:", e.message);
+    const stripped = {};
+    const dropPattern = /^(is[A-Z]|has[A-Z]|can[A-Z]|obsolete_)/;
+    Object.keys(current).forEach(function(k) {
+      if (dropPattern.test(k)) return;
+      if (k === "timestamp" || k === "Timestamp") return;
+      stripped[k] = current[k];
+    });
+    await managerApi("PUT", "/api2" + formPath + "/" + key, stripped);
+  }
 }
 
 // UNCONFIRMED endpoint names for the Deduction Item a payslip Deduction
@@ -741,28 +764,63 @@ async function resolveInvoiceTransactionId(key) {
 // "12010 SE Eastbourne Ln\nHappy Valley, OR 97086". Assuming Customer/
 // Supplier/Employee records use the same "Address" field shape.
 function parseAddressBlock(raw) {
-  if (!raw) return { street1: "", city: "", state: "", zip: "" };
+  if (!raw) return { street1: "", street2: "", city: "", state: "", zip: "" };
   const lines = String(raw).split(/\r?\n/).map(function(l) { return l.trim(); }).filter(Boolean);
-  if (lines.length === 0) return { street1: "", city: "", state: "", zip: "" };
+  if (lines.length === 0) return { street1: "", street2: "", city: "", state: "", zip: "" };
+
+  let streetJoined, city = "", state = "", zip = "";
+
   if (lines.length === 1) {
-    // Only one line at all — no separate City/State/Zip line to parse out.
-    return { street1: lines[0], city: "", state: "", zip: "" };
-  }
-  // Last line is always City/State/Zip; everything before it is the street
-  // address, however many lines that spans (e.g. a second "Suite ..." line)
-  // — joined with spaces rather than assuming exactly one street line.
-  const lastLine = lines[lines.length - 1];
-  const street1 = lines.slice(0, lines.length - 1).join(" ");
-  let city = "", state = "", zip = "";
-  const m = lastLine.match(/^(.*),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
-  if (m) {
-    city = m[1].trim();
-    state = m[2].toUpperCase();
-    zip = m[3];
+    // Confirmed real case: a single line with NO newlines at all, using
+    // commas to separate street/city/state/zip instead — e.g. "12042 SE
+    // Sunnyside Rd, Pmb 365, Happy Valley, OR 97015". Try to pull the
+    // trailing "City, ST ZIP" off the end; whatever's left (however many
+    // comma-separated parts) is the street portion.
+    const singleLineMatch = lines[0].match(/^(.*),\s*([^,]+),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
+    if (singleLineMatch) {
+      streetJoined = singleLineMatch[1].trim();
+      city = singleLineMatch[2].trim();
+      state = singleLineMatch[3].toUpperCase();
+      zip = singleLineMatch[4];
+    } else {
+      streetJoined = lines[0]; // doesn't match any known pattern — keep as street, nothing lost
+    }
   } else {
-    city = lastLine; // doesn't match the expected pattern — dump it in city rather than lose it
+    // Last line is always City/State/Zip; everything before it is the street
+    // address, however many lines that spans — joined with spaces.
+    const lastLine = lines[lines.length - 1];
+    streetJoined = lines.slice(0, lines.length - 1).join(" ");
+    const m = lastLine.match(/^(.*),\s*([A-Za-z]{2})\s+(\d{5}(-\d{4})?)$/);
+    if (m) {
+      city = m[1].trim();
+      state = m[2].toUpperCase();
+      zip = m[3];
+    } else {
+      city = lastLine; // doesn't match the expected pattern — dump it in city rather than lose it
+    }
   }
-  return { street1: street1, city: city, state: state, zip: zip };
+
+  // ORESTAR's schema caps street1 at 40 characters — confirmed the hard way
+  // (a real upload got rejected for exactly this). Rather than truncate and
+  // lose data, split the overflow into street2 (also present in the schema,
+  // also 40 chars, and never used before this fix).
+  let street1 = streetJoined, street2 = "";
+  if (street1.length > 40) {
+    // Prefer breaking on a natural word boundary near the limit rather than
+    // mid-word.
+    let breakAt = street1.lastIndexOf(" ", 40);
+    if (breakAt < 20) breakAt = 40; // no reasonable word boundary — hard-split
+    street2 = street1.slice(breakAt).trim().slice(0, 40);
+    street1 = street1.slice(0, breakAt).trim();
+  }
+
+  // zip must be exactly 5 digits per the schema — strip anything else
+  // (a "97015-1234" style zip+4 gets its extension dropped here rather than
+  // rejected outright; the schema does have a separate zip-plus4 element we
+  // could add later if this ever needs to be more precise).
+  const zipDigitsOnly = String(zip).replace(/\D/g, "").slice(0, 5);
+
+  return { street1: street1, street2: street2, city: city.slice(0, 100), state: state.slice(0, 2), zip: zipDigitsOnly };
 }
 
 // Cached supplier list, fetched once and matched client-side by name — used
@@ -799,7 +857,7 @@ async function resolveExpendInfo(detail, item) {
   const ref = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
   if (!ref) return null;
   if (typeof ref === "string" && !isGuidLike(ref)) {
-    return { name: ref, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+    return { name: ref, street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
   }
   const key = typeof ref === "string" ? ref : (ref.key || ref.Key);
   if (!key) return null;
@@ -847,6 +905,7 @@ async function resolveContactRecord(key, hintedEndpoint) {
       const result = {
         name: name,
         street1: addr.street1,
+        street2: addr.street2,
         city: addr.city,
         state: addr.state,
         zip: addr.zip,
@@ -888,14 +947,14 @@ async function resolveContactInfo(detail, item, sourceLabel) {
       // No matching Supplier found — use the Payee text directly rather
       // than silently falling through to the Employee, since the Payee is
       // the one that's supposed to be the ORESTAR contact here.
-      return { name: rawPayee, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: "B", contactId: "", recordKey: null, recordEndpoint: null };
+      return { name: rawPayee, street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: "B", contactId: "", recordKey: null, recordEndpoint: null };
     }
     // No Payee text at all — fall back to whoever paid (Employee), since
     // that's still better than nothing.
     const employeeRef = (detail && (detail.PaidBy || detail.paidBy)) || (item && (item.PaidBy || item.paidBy));
     if (employeeRef) {
       if (typeof employeeRef === "string" && !isGuidLike(employeeRef)) {
-        return { name: employeeRef, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+        return { name: employeeRef, street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
       }
       const key = typeof employeeRef === "string" ? employeeRef : (employeeRef.key || employeeRef.Key);
       const resolved = await resolveContactRecord(key, "employee-form");
@@ -945,7 +1004,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
       key = ref.key || ref.Key;
       inlineName = ref.name || ref.Name;
     }
-    if (inlineName) { resolvedInfo = { name: inlineName, street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null }; break; }
+    if (inlineName) { resolvedInfo = { name: inlineName, street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null }; break; }
     const resolved = await resolveContactRecord(key, hint);
     if (resolved) { resolvedInfo = resolved; break; }
   }
@@ -971,7 +1030,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
     if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
-      return { name: plainTextCandidates[i], street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+      return { name: plainTextCandidates[i], street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
     }
   }
 
@@ -980,7 +1039,7 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   // multiple different blank transactions don't get merged into a single
   // contact entry (editing one would otherwise silently edit them all).
   const fallbackKey = (item && (item.key || item.Key)) || (detail && (detail.key || detail.Key)) || Math.random().toString(36).slice(2, 8);
-  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
+  return { name: "(no contact - " + String(fallbackKey).slice(0, 8) + ")", street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", recordKey: null, recordEndpoint: null };
 }
 
 // UNTESTED against live data — no confirmed field names for how Manager
@@ -1076,7 +1135,7 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
       if (!amount) { console.warn("[ORESTAR] Payslip " + key + " deduction[" + di + "] matched the item name but amount resolved to 0 — raw DeductionAmount:", d.DeductionAmount); continue; }
 
       const employeeRef = detail.employee || detail.Employee;
-      let contactInfo = { name: "(no contact - " + String(key).slice(0, 8) + ")", street1: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", peopleId: "", recordKey: null, recordEndpoint: null };
+      let contactInfo = { name: "(no contact - " + String(key).slice(0, 8) + ")", street1: "", street2: "", city: "", state: "", zip: "", occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null, type: null, contactId: "", peopleId: "", recordKey: null, recordEndpoint: null };
       if (employeeRef) {
         if (typeof employeeRef === "string" && !isGuidLike(employeeRef)) {
           contactInfo = Object.assign({}, contactInfo, { name: employeeRef });
@@ -1401,7 +1460,7 @@ function guessContact(name) {
     last: looksLikePerson ? parts.slice(1).join(" ") : "",
     business: looksLikePerson ? "" : name,
     committeeName: "",
-    street1: "", city: "", state: "", zip: "", county: "",
+    street1: "", street2: "", city: "", state: "", zip: "", county: "",
     occupation: "", employerName: "", employerCity: "", employerState: "", employmentStatus: null,
     contactId: "", recordKey: null, recordEndpoint: null
   };
@@ -1450,6 +1509,7 @@ function buildContactFromInfo(name, info) {
   if (info.employerState) base.employerState = info.employerState;
   if (info.employmentStatus) base.employmentStatus = info.employmentStatus;
   if (info.street1) base.street1 = info.street1;
+  if (info.street2) base.street2 = info.street2;
   if (info.city) base.city = info.city;
   if (info.state) base.state = info.state;
   if (info.zip) base.zip = info.zip;
@@ -1488,6 +1548,7 @@ function renderContacts() {
       '<div class="small" style="margin:6px 0 4px;">Optional — fill in if this contact\'s yearly total exceeds $100:</div>' +
       '<div class="row">' +
         '<div><label>Street</label><input data-name="' + escapeXml(name) + '" data-field="street1" value="' + escapeXml(c.street1) + '"></div>' +
+        '<div><label>Street 2</label><input data-name="' + escapeXml(name) + '" data-field="street2" value="' + escapeXml(c.street2 || "") + '"></div>' +
         '<div><label>City</label><input data-name="' + escapeXml(name) + '" data-field="city" value="' + escapeXml(c.city) + '"></div>' +
         '<div><label>State</label><input data-name="' + escapeXml(name) + '" data-field="state" maxlength="2" value="' + escapeXml(c.state) + '"></div>' +
         '<div><label>Zip</label><input data-name="' + escapeXml(name) + '" data-field="zip" value="' + escapeXml(c.zip) + '"></div>' +
@@ -1576,8 +1637,23 @@ function buildContactXml(id, c) {
 
   let addressXml = "";
   if (c.street1 || c.city || c.state || c.zip) {
+    // Defensive safety net: even though parsing now handles this at the
+    // source, a manual edit in the Confirm Contacts UI could still produce
+    // a street1 over the schema's 40-char limit — split into street2
+    // instead of risking another real-world rejection like the one that
+    // prompted this fix.
+    let street1 = c.street1 || "";
+    let street2 = c.street2 || "";
+    if (street1.length > 40) {
+      let breakAt = street1.lastIndexOf(" ", 40);
+      if (breakAt < 20) breakAt = 40;
+      const overflow = street1.slice(breakAt).trim();
+      street1 = street1.slice(0, breakAt).trim();
+      street2 = (overflow + (street2 ? " " + street2 : "")).slice(0, 40);
+    }
     addressXml = "<address>" +
-      (c.street1 ? "<street1>" + escapeXml(c.street1) + "</street1>" : "") +
+      (street1 ? "<street1>" + escapeXml(street1) + "</street1>" : "") +
+      (street2 ? "<street2>" + escapeXml(street2.slice(0, 40)) + "</street2>" : "") +
       (c.city ? "<city>" + escapeXml(c.city) + "</city>" : "") +
       (c.state ? "<state>" + escapeXml(c.state) + "</state>" : "") +
       (c.zip ? "<zip>" + escapeXml(c.zip) + "</zip>" : "") +
