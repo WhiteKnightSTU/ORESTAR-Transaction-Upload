@@ -437,29 +437,6 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
   }
 });
 
-document.getElementById("testBatchBtn").addEventListener("click", async function() {
-  const el = document.getElementById("batchTestResult");
-  el.innerHTML = '<span class="small">Testing…</span>';
-  try {
-    const data = await managerApi("GET", "/api4/receipt-batch?pageSize=3");
-    console.log("[ORESTAR] /api4/receipt-batch raw response:", data);
-    const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
-    const items = arrayKey ? data[arrayKey] : [];
-    if (items.length === 0) {
-      el.innerHTML = '<span class="small">Reached the endpoint but got 0 items — check console for the raw response.</span>';
-      return;
-    }
-    const first = items[0].item || items[0];
-    const hasCustomFields = !!(first.CustomFields2 || first.customFields2);
-    const hasLines = !!(first.Lines || first.lines);
-    console.log("[ORESTAR] receipt-batch first item (unwrapped):", first);
-    console.log("[ORESTAR] receipt-batch first item as JSON string: " + JSON.stringify(first));
-    el.innerHTML = '<span class="small">Got ' + items.length + ' item(s). Has CustomFields2: ' + hasCustomFields + '. Has Lines: ' + hasLines + '. Check console for full detail — compare against what receipt-form/{key} normally returns to see if this is a full replacement.</span>';
-  } catch (e) {
-    el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
-  }
-});
-
 document.getElementById("loadAccountsBtn").addEventListener("click", async function() {
   showStatus("pending", "Resolving custom fields and loading accounts…");
   try {
