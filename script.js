@@ -453,6 +453,7 @@ document.getElementById("testBatchBtn").addEventListener("click", async function
     const hasCustomFields = !!(first.CustomFields2 || first.customFields2);
     const hasLines = !!(first.Lines || first.lines);
     console.log("[ORESTAR] receipt-batch first item (unwrapped):", first);
+    console.log("[ORESTAR] receipt-batch first item as JSON string: " + JSON.stringify(first));
     el.innerHTML = '<span class="small">Got ' + items.length + ' item(s). Has CustomFields2: ' + hasCustomFields + '. Has Lines: ' + hasLines + '. Check console for full detail — compare against what receipt-form/{key} normally returns to see if this is a full replacement.</span>';
   } catch (e) {
     el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
