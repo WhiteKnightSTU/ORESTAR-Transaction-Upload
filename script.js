@@ -135,23 +135,26 @@ async function postMessageWithResponse(message) {
       if (d && d.type && d.type.endsWith("-response") && d.requestId === requestId) {
         clearTimeout(t);
         window.removeEventListener("message", onMessage);
-        // Status is checked FIRST and always wins — a real 4xx/5xx is a
-        // genuine failure no matter what d.error's text says. Manager's own
-        // proxy throws the identical "Unexpected end of JSON input" error
-        // internally for BOTH a successful empty-body write (204) AND a
-        // genuinely empty-body 404 — those are indistinguishable by error
-        // text alone, so status has to be the deciding factor, not text.
+        // Confirmed via direct verification (checking the actual record in
+        // Manager after a reported "failure"): for write methods, Manager's
+        // proxy sometimes reports a synthetic status 500 alongside this
+        // exact error text even when the underlying write genuinely
+        // succeeded — d.status is NOT reliable in this specific scenario,
+        // so this check has to come before the status check for writes.
+        // GET requests don't have this ambiguity (confirmed many times with
+        // real, accurate 404 JSON error bodies), so status stays
+        // authoritative there.
+        const isWriteMethod = message.method === "PUT" || message.method === "PATCH" || message.method === "POST";
+        const looksLikeEmptyBodyParse = d.error && String(d.error).indexOf("Unexpected end of JSON input") !== -1;
+        if (isWriteMethod && looksLikeEmptyBodyParse) {
+          resolve(d.body || {});
+          return;
+        }
         if (d.status && d.status >= 400) {
           reject(new Error("HTTP " + d.status + (d.body ? ": " + JSON.stringify(d.body) : (d.error ? ": " + d.error : ""))));
           return;
         }
         if (d.error) {
-          const looksLikeEmptyBodyParse = String(d.error).indexOf("Unexpected end of JSON input") !== -1;
-          const isWriteMethod = message.method === "PUT" || message.method === "PATCH" || message.method === "POST";
-          if (looksLikeEmptyBodyParse && isWriteMethod) {
-            resolve(d.body || {});
-            return;
-          }
           reject(new Error(d.error));
           return;
         }
@@ -434,6 +437,28 @@ document.getElementById("listFieldsBtn").addEventListener("click", async functio
   }
 });
 
+document.getElementById("testBatchBtn").addEventListener("click", async function() {
+  const el = document.getElementById("batchTestResult");
+  el.innerHTML = '<span class="small">Testing…</span>';
+  try {
+    const data = await managerApi("GET", "/api4/receipt-batch?pageSize=3");
+    console.log("[ORESTAR] /api4/receipt-batch raw response:", data);
+    const arrayKey = Object.keys(data).find(function(k) { return Array.isArray(data[k]); });
+    const items = arrayKey ? data[arrayKey] : [];
+    if (items.length === 0) {
+      el.innerHTML = '<span class="small">Reached the endpoint but got 0 items — check console for the raw response.</span>';
+      return;
+    }
+    const first = items[0].item || items[0];
+    const hasCustomFields = !!(first.CustomFields2 || first.customFields2);
+    const hasLines = !!(first.Lines || first.lines);
+    console.log("[ORESTAR] receipt-batch first item (unwrapped):", first);
+    el.innerHTML = '<span class="small">Got ' + items.length + ' item(s). Has CustomFields2: ' + hasCustomFields + '. Has Lines: ' + hasLines + '. Check console for full detail — compare against what receipt-form/{key} normally returns to see if this is a full replacement.</span>';
+  } catch (e) {
+    el.innerHTML = '<span class="small">Failed: ' + escapeXml(e.message) + '</span>';
+  }
+});
+
 document.getElementById("loadAccountsBtn").addEventListener("click", async function() {
   showStatus("pending", "Resolving custom fields and loading accounts…");
   try {
@@ -629,30 +654,7 @@ async function safeSetCustomField(formPath, key, fieldGuid, kind, value) {
   } else {
     current.CustomFields2 = cf;
   }
-
-  try {
-    await managerApi("PUT", "/api2" + formPath + "/" + key, current);
-    return;
-  } catch (e) {
-    // The full-object echo-back is the safe default (preserves every field
-    // exactly as fetched) — but some record types apparently reject it,
-    // likely because the GET response includes computed/read-only metadata
-    // (is*/has*/can*/obsolete_* flags, timestamps, etc.) that the write
-    // endpoint doesn't accept back. Retry once with those specific
-    // patterns stripped — still sending back every real business field
-    // (Date, Amount, Lines, Customer, everything not matching these
-    // patterns), never falling back to a bare partial write like the one
-    // that caused actual data loss earlier.
-    console.warn("[ORESTAR] Full-object write failed for " + formPath + "/" + key + ", retrying with computed fields stripped:", e.message);
-    const stripped = {};
-    const dropPattern = /^(is[A-Z]|has[A-Z]|can[A-Z]|obsolete_)/;
-    Object.keys(current).forEach(function(k) {
-      if (dropPattern.test(k)) return;
-      if (k === "timestamp" || k === "Timestamp") return;
-      stripped[k] = current[k];
-    });
-    await managerApi("PUT", "/api2" + formPath + "/" + key, stripped);
-  }
+  await managerApi("PUT", "/api2" + formPath + "/" + key, current);
 }
 
 // UNCONFIRMED endpoint names for the Deduction Item a payslip Deduction
