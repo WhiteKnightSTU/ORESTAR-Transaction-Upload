@@ -1179,18 +1179,56 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
 
 async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
-  const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
-  const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
-  const items = arrayKey ? listData[arrayKey] : [];
+
+  // Confirmed live: /api4/{resource}-batch returns full record detail
+  // directly (CustomFields2, Lines, everything) — the same data
+  // /api2/{resource}-form/{key} would give per-record, but in one paginated
+  // call instead of one call per record. Try this first; if it's not
+  // available for this resource, fall back to the proven list+detail
+  // approach unchanged.
+  const resourceBase = listPath.replace(/^\//, "").replace(/s$/, "");
+  const batchPath = "/api4/" + resourceBase + "-batch";
+  let items = [];
+  let usingBatch = false;
+  try {
+    const batchData = await managerApi("GET", batchPath + "?pageSize=" + FETCH_PAGE_SIZE);
+    const batchArrayKey = Object.keys(batchData).find(function(k) { return Array.isArray(batchData[k]); });
+    const rawBatchItems = batchArrayKey ? batchData[batchArrayKey] : [];
+    if (rawBatchItems.length > 0) {
+      items = rawBatchItems.map(function(entry) {
+        if (entry && entry.item && typeof entry.item === "object") {
+          const merged = Object.assign({}, entry.item);
+          if (!merged.key && !merged.Key) merged.key = entry.key || entry.Key;
+          return merged;
+        }
+        return entry;
+      });
+      usingBatch = true;
+      console.log("[ORESTAR] " + sourceLabel + ": using " + batchPath + " (" + items.length + " item(s), full detail included — skipping per-record detail fetch)");
+    }
+  } catch (e) {
+    console.warn("[ORESTAR] " + sourceLabel + ": batch endpoint " + batchPath + " not available, falling back to list+detail:", e.message);
+  }
+
+  if (!usingBatch) {
+    const listData = await managerApi("GET", "/api2" + listPath + "?pageSize=" + FETCH_PAGE_SIZE);
+    const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
+    items = arrayKey ? listData[arrayKey] : [];
+  }
+
   const possiblyTruncated = items.length >= FETCH_PAGE_SIZE;
 
   for (const item of items) {
     const key = item.key || item.Key;
     let detail;
-    try {
-      detail = await managerApi("GET", "/api2" + formPath + "/" + key);
-    } catch (e) {
-      continue;
+    if (usingBatch) {
+      detail = item; // batch item already IS the full detail — nothing more to fetch
+    } else {
+      try {
+        detail = await managerApi("GET", "/api2" + formPath + "/" + key);
+      } catch (e) {
+        continue;
+      }
     }
 
     // Transaction ID field: empty/null means not yet exported (include it);
