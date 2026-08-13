@@ -542,7 +542,7 @@ function extractAmount(detail, item) {
 }
 
 function extractDescription(detail, item) {
-  const direct = (detail && detail.Description) || (item && item.Description);
+  const direct = (detail && (detail.Description || detail.description)) || (item && (item.Description || item.description));
   if (direct) return direct;
 
   const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
@@ -1005,8 +1005,8 @@ async function resolveContactInfo(detail, item, sourceLabel) {
   // Older, never-fully-confirmed field-name guesses, treated as already
   // being plain display text rather than keys needing a lookup.
   const plainTextCandidates = [
-    detail && detail.Payee, detail && detail.Payer, detail && detail.Name,
-    item && item.Payee, item && item.Payer, item && item.Name
+    detail && detail.Payee, detail && detail.payee, detail && detail.Payer, detail && detail.payer, detail && detail.Name, detail && detail.name,
+    item && item.Payee, item && item.payee, item && item.Payer, item && item.payer, item && item.Name, item && item.name
   ];
   for (let i = 0; i < plainTextCandidates.length; i++) {
     if (typeof plainTextCandidates[i] === "string" && plainTextCandidates[i]) {
@@ -1053,8 +1053,16 @@ function extractInvoiceLinks(detail, item) {
 
 function extractAccountRef(item, detail) {
   const candidates = [
-    detail && detail.ReceivedIn, detail && detail.PaidFrom, detail && detail.BankAccount, detail && detail.CashAccount, detail && detail.Account,
-    item && item.ReceivedIn, item && item.PaidFrom, item && item.BankAccount, item && item.CashAccount, item && item.Account
+    detail && detail.ReceivedIn, detail && detail.receivedIn,
+    detail && detail.PaidFrom, detail && detail.paidFrom,
+    detail && detail.BankAccount, detail && detail.bankAccount,
+    detail && detail.CashAccount, detail && detail.cashAccount,
+    detail && detail.Account, detail && detail.account,
+    item && item.ReceivedIn, item && item.receivedIn,
+    item && item.PaidFrom, item && item.paidFrom,
+    item && item.BankAccount, item && item.bankAccount,
+    item && item.CashAccount, item && item.cashAccount,
+    item && item.Account, item && item.account
   ];
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
@@ -1219,7 +1227,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
 
     // Purchase Invoices commonly use "IssueDate" rather than "Date" (unlike
     // Receipts/Payments) — checking both plus a couple other likely variants.
-    const tranDate = dateOnly(detail.Date || item.Date || item.date ||
+    const tranDate = dateOnly(detail.Date || detail.date || item.Date || item.date ||
                                detail.IssueDate || item.IssueDate || detail.issueDate || item.issueDate ||
                                detail.InvoiceDate || item.InvoiceDate);
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
