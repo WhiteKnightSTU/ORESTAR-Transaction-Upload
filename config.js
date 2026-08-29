@@ -57,5 +57,14 @@ const ORESTAR_CONFIG = {
   // line referencing this item gets filed as a Contribution (Type C,
   // Subtype IKP — In-Kind/Forgiven Personal Expenditure), not an
   // Expenditure — matched by name against the deduction's linked item.
-  FORGIVEN_EXPENSE_CLAIM_ITEM_NAME: "Forgiven Expense Claim"
+  FORGIVEN_EXPENSE_CLAIM_ITEM_NAME: "Forgiven Expense Claim",
+
+  // Number-type field. When filled in on a transaction, that transaction is
+  // split into TWO ORESTAR transactions: one for the fair market value
+  // itself (Type OR / Subtype FM — Items Sold at Fair Market Value), and
+  // one for the remainder (original amount minus this value), filed
+  // normally per the Transaction Type field as usual. Both halves are
+  // tracked together via the single Transaction ID field above — they're
+  // always exported and uploaded as one batch.
+  FAIR_MARKET_VALUE_FIELD_NAME: "Fair Market Value"
 };

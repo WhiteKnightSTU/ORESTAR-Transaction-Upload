@@ -188,7 +188,8 @@ let resolvedGuids = {
   notEmployed: null,
   selfEmployed: null,
   contactId: null,
-  tranPurposeCandidates: []
+  tranPurposeCandidates: [],
+  fairMarketValueCandidates: []
 };
 
 // /api4/custom-fields is a HATEOAS-style hub, not a flat list — it returns
@@ -256,6 +257,7 @@ async function resolveFieldGuids() {
   const selfEmployedMatches = findByName(cfg.SELF_EMPLOYED_FIELD_NAME || "");
   const contactIdMatches = findByName(cfg.CONTACT_ID_FIELD_NAME || "");
   const tranPurposeMatches = findByName(cfg.TRAN_PURPOSE_FIELD_NAME || "");
+  const fairMarketValueMatches = findByName(cfg.FAIR_MARKET_VALUE_FIELD_NAME || "");
 
   // Placement turned out to be opaque form-type GUIDs, not readable text
   // ("Receipt"/"Payment") — no reliable way to tell which is which from the
@@ -278,7 +280,8 @@ async function resolveFieldGuids() {
     notEmployed: guidOf(notEmployedMatches[0]),
     selfEmployed: guidOf(selfEmployedMatches[0]),
     contactId: guidOf(contactIdMatches[0]),
-    tranPurposeCandidates: tranPurposeMatches.map(guidOf).filter(Boolean)
+    tranPurposeCandidates: tranPurposeMatches.map(guidOf).filter(Boolean),
+    fairMarketValueCandidates: fairMarketValueMatches.map(guidOf).filter(Boolean)
   };
 
   console.log("[ORESTAR] Resolved GUIDs:", resolvedGuids);
@@ -294,6 +297,7 @@ async function resolveFieldGuids() {
     (resolvedGuids.selfEmployed ? "✓" : "✗") + " Self-Employed (\"" + (cfg.SELF_EMPLOYED_FIELD_NAME || "") + "\")" + (resolvedGuids.selfEmployed ? "" : " — not found"),
     (resolvedGuids.contactId ? "✓" : "✗") + " Contact ID (\"" + (cfg.CONTACT_ID_FIELD_NAME || "") + "\")" + (resolvedGuids.contactId ? "" : " — not found (optional)"),
     (resolvedGuids.tranPurposeCandidates.length > 0 ? "✓" : "✗") + " Transaction Purpose (\"" + (cfg.TRAN_PURPOSE_FIELD_NAME || "") + "\") — " + resolvedGuids.tranPurposeCandidates.length + " field(s) found (optional)",
+    (resolvedGuids.fairMarketValueCandidates.length > 0 ? "✓" : "✗") + " Fair Market Value (\"" + (cfg.FAIR_MARKET_VALUE_FIELD_NAME || "") + "\") — " + resolvedGuids.fairMarketValueCandidates.length + " field(s) found (optional)",
     (resolvedGuids.occupation ? "✓" : "✗") + " Occupation (\"" + (cfg.OCCUPATION_FIELD_NAME || "") + "\")" + (resolvedGuids.occupation ? "" : " — not found"),
     (resolvedGuids.employerName ? "✓" : "✗") + " Employer Name (\"" + (cfg.EMPLOYER_NAME_FIELD_NAME || "") + "\")" + (resolvedGuids.employerName ? "" : " — not found"),
     (resolvedGuids.employerCity ? "✓" : "✗") + " Employer City (\"" + (cfg.EMPLOYER_CITY_FIELD_NAME || "") + "\")" + (resolvedGuids.employerCity ? "" : " — not found"),
@@ -1162,7 +1166,7 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
 }
 
-async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, selectedKeys, forcedType, forcedSubCode) {
+async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, fairMarketValueFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
 
   // Confirmed live: /api4/{resource}-batch returns full record detail
@@ -1216,8 +1220,13 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       }
     }
 
-    // Transaction ID field: empty/null means not yet exported (include it);
-    // any value (this business already exported it) means exclude it.
+    // Fair Market Value splits one Manager record into two ORESTAR
+    // transactions, but both are tracked together via the single master
+    // Transaction ID field — they're always exported and uploaded as one
+    // batch, so one shared dedup check is correct here.
+    const rawFairMarketValue = getCustomFieldValueAny(detail, fairMarketValueFieldIds, "number");
+    const hasFairMarketValue = rawFairMarketValue !== undefined && rawFairMarketValue !== null && rawFairMarketValue !== "" && Number(rawFairMarketValue) !== 0;
+
     const txnIdValue = getCustomFieldValue(detail, downloadedFieldId, "number");
     const alreadyDownloaded = txnIdValue !== undefined && txnIdValue !== null && txnIdValue !== "";
     if (alreadyDownloaded) continue;
@@ -1279,6 +1288,10 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       typeCode = TYPE_CODE[typeText] || "";
       subCode = subtypeText ? (SUBTYPE_TEXT_TO_CODE[subtypeText] || "") : "";
       if (!subCode && typeCode) subCode = DEFAULT_SUBTYPE[typeCode] || "";
+
+      if (!typeCode || !subCode) {
+        console.warn("[ORESTAR] " + sourceLabel + " " + key + " missing Type/Sub-type — raw Transaction Type value: " + JSON.stringify(cfValue) + " | parsed typeText: " + JSON.stringify(typeText) + " | typeCode: " + JSON.stringify(typeCode) + " | subtypeText: " + JSON.stringify(subtypeText) + " | subCode: " + JSON.stringify(subCode) + " | candidate field GUIDs tried: " + JSON.stringify(typeSubtypeFieldIds));
+      }
     }
 
     const rawPaymentMethod = getCustomFieldValueAny(detail, paymentMethodFieldIds, "text");
@@ -1313,26 +1326,75 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       }
     }
 
-    results.push({
-      source: sourceLabel,
-      key: key,
-      formPath: formPath,
-      date: tranDate,
-      enteredDate: enteredDate,
-      accountName: acctRef.name || acctRef.key || "(unknown)",
-      amount: amount,
-      contactName: contactName,
-      contactInfo: contactInfo,
-      typeCode: typeCode,
-      subCode: subCode,
-      description: description,
-      paymentMethod: paymentMethod,
-      checkNo: checkNo,
-      apInvoiceRefs: apInvoiceRefs,
-      tranPurposeCodes: tranPurposeCodes,
-      expendContactName: expendContactName,
-      expendContactInfo: expendContactInfo
-    });
+    if (hasFairMarketValue) {
+      const fmvAmount = Math.abs(getAmountValue(rawFairMarketValue));
+      const remainderAmount = amount - fmvAmount;
+
+      results.push({
+        source: sourceLabel + " (Fair Market Value)",
+        key: key,
+        formPath: formPath,
+        date: tranDate,
+        enteredDate: enteredDate,
+        accountName: acctRef.name || acctRef.key || "(unknown)",
+        amount: fmvAmount,
+        contactName: contactName,
+        contactInfo: contactInfo,
+        typeCode: "OR",
+        subCode: "FM",
+        description: description,
+        paymentMethod: paymentMethod,
+        checkNo: checkNo,
+        apInvoiceRefs: [],
+        tranPurposeCodes: [],
+        expendContactName: expendContactName,
+        expendContactInfo: expendContactInfo,
+        transactionIdFieldGuid: downloadedFieldId
+      });
+      results.push({
+        source: sourceLabel + " (Remainder)",
+        key: key,
+        formPath: formPath,
+        date: tranDate,
+        enteredDate: enteredDate,
+        accountName: acctRef.name || acctRef.key || "(unknown)",
+        amount: remainderAmount,
+        contactName: contactName,
+        contactInfo: contactInfo,
+        typeCode: typeCode,
+        subCode: subCode,
+        description: description,
+        paymentMethod: paymentMethod,
+        checkNo: checkNo,
+        apInvoiceRefs: apInvoiceRefs,
+        tranPurposeCodes: tranPurposeCodes,
+        expendContactName: expendContactName,
+        expendContactInfo: expendContactInfo,
+        transactionIdFieldGuid: downloadedFieldId
+      });
+    } else {
+      results.push({
+        source: sourceLabel,
+        key: key,
+        formPath: formPath,
+        date: tranDate,
+        enteredDate: enteredDate,
+        accountName: acctRef.name || acctRef.key || "(unknown)",
+        amount: amount,
+        contactName: contactName,
+        contactInfo: contactInfo,
+        typeCode: typeCode,
+        subCode: subCode,
+        description: description,
+        paymentMethod: paymentMethod,
+        checkNo: checkNo,
+        apInvoiceRefs: apInvoiceRefs,
+        tranPurposeCodes: tranPurposeCodes,
+        expendContactName: expendContactName,
+        expendContactInfo: expendContactInfo,
+        transactionIdFieldGuid: downloadedFieldId
+      });
+    }
   }
   return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
 }
@@ -1347,8 +1409,8 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
   try {
     const selectedKeys = selectedAccountKeys();
 
-    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys);
-    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys);
+    const receiptResult = await loadCollection("/receipts", "/receipt-form", "Receipt", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, resolvedGuids.fairMarketValueCandidates, selectedKeys);
+    const paymentResult = await loadCollection("/payments", "/payment-form", "Payment", resolvedGuids.typeSubtypeCandidates, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, resolvedGuids.fairMarketValueCandidates, selectedKeys);
 
     // Both endpoints below are UNCONFIRMED — inferred from the same naming
     // pattern that's worked for every other resource (receipts/payments).
@@ -1357,12 +1419,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
     let expenseClaimResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
     let purchaseInvoiceResults = { results: [], possiblyTruncated: false, totalFetched: 0 };
     try {
-      expenseClaimResults = await loadCollection("/expense-claims", "/expense-claim-form", "Expense Claim", null, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, selectedKeys, "E", "PE");
+      expenseClaimResults = await loadCollection("/expense-claims", "/expense-claim-form", "Expense Claim", null, resolvedGuids.transactionId, resolvedGuids.paymentMethodCandidates, resolvedGuids.checkNumberCandidates, resolvedGuids.tranPurposeCandidates, [], selectedKeys, "E", "PE");
     } catch (e) {
       console.warn("[ORESTAR] Expense Claims fetch failed (endpoint may not match your version):", e.message);
     }
     try {
-      purchaseInvoiceResults = await loadCollection("/purchase-invoices", "/purchase-invoice-form", "Purchase Invoice (AP)", null, resolvedGuids.transactionId, [], [], resolvedGuids.tranPurposeCandidates, selectedKeys, "E", "AP");
+      purchaseInvoiceResults = await loadCollection("/purchase-invoices", "/purchase-invoice-form", "Purchase Invoice (AP)", null, resolvedGuids.transactionId, [], [], resolvedGuids.tranPurposeCandidates, [], selectedKeys, "E", "AP");
     } catch (e) {
       console.warn("[ORESTAR] Purchase Invoices fetch failed (endpoint may not match your version):", e.message);
     }
@@ -1911,8 +1973,9 @@ document.getElementById("saveTxnIdsBtn").addEventListener("click", async functio
   const failures = [];
   for (const entry of entries) {
     const t = loadedTransactions[entry.idx];
+    const targetFieldGuid = t.transactionIdFieldGuid || cfTransactionId;
     try {
-      await safeSetCustomField(t.formPath, t.key, cfTransactionId, "number", Number(entry.value));
+      await safeSetCustomField(t.formPath, t.key, targetFieldGuid, "number", Number(entry.value));
       succeeded++;
     } catch (e) {
       failures.push(t.source + " " + t.key + " (entered ID " + entry.value + "): " + e.message);
