@@ -350,6 +350,18 @@ function dateOnly(v) {
   return String(v).slice(0, 10);
 }
 
+// Transactions dated after today shouldn't be exported yet — held back
+// until their date arrives or passes. ISO "YYYY-MM-DD" strings compare
+// correctly with a plain string comparison, so no date-object math needed.
+function todayDateString() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function isFutureDate(dateStr) {
+  if (!dateStr) return false; // no parseable date at all — don't filter here, the existing "no date matched" warning already covers this case
+  return dateStr > todayDateString();
+}
+
 function localDateFromTimestamp(ts) {
   if (!ts) return "";
   const d = new Date(ts);
@@ -1090,6 +1102,7 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
   const cfg = (typeof ORESTAR_CONFIG !== "undefined") ? ORESTAR_CONFIG : {};
   const targetItemName = (cfg.FORGIVEN_EXPENSE_CLAIM_ITEM_NAME || "").trim().toLowerCase();
   const results = [];
+  let futureDatedSkipped = 0;
   const listData = await managerApi("GET", "/api2/payslips?pageSize=" + FETCH_PAGE_SIZE);
   const arrayKey = Object.keys(listData).find(function(k) { return Array.isArray(listData[k]); });
   const items = arrayKey ? listData[arrayKey] : [];
@@ -1139,6 +1152,7 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
       }
 
       const tranDate = dateOnly(detail.Date || item.Date || item.date);
+      if (isFutureDate(tranDate)) { futureDatedSkipped++; continue; }
 
       results.push({
         source: "Payslip (Forgiven Expense Claim)",
@@ -1163,11 +1177,12 @@ async function loadForgivenExpenseClaims(downloadedFieldId, selectedKeys) {
     }
   }
   console.log("[ORESTAR] loadForgivenExpenseClaims summary: " + items.length + " payslip(s) fetched, " + results.length + " forgiveness match(es) found.");
-  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
+  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length, futureDatedSkipped: futureDatedSkipped };
 }
 
 async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldIds, downloadedFieldId, paymentMethodFieldIds, checkNumberFieldIds, tranPurposeFieldIds, fairMarketValueFieldIds, selectedKeys, forcedType, forcedSubCode) {
   const results = [];
+  let futureDatedSkipped = 0;
 
   // Confirmed live: /api4/{resource}-batch returns full record detail
   // directly (CustomFields2, Lines, everything) — the same data
@@ -1239,6 +1254,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     const tranDate = dateOnly(detail.Date || detail.date || item.Date || item.date ||
                                detail.IssueDate || item.IssueDate || detail.issueDate || item.issueDate ||
                                detail.InvoiceDate || item.InvoiceDate);
+    if (isFutureDate(tranDate)) { futureDatedSkipped++; continue; }
     const enteredDate = localDateFromTimestamp(item.Timestamp || item.timestamp || detail.Timestamp);
     const amount = extractAmount(detail, item);
     const contactInfo = await resolveContactInfo(detail, item, sourceLabel);
@@ -1396,7 +1412,7 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
       });
     }
   }
-  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length };
+  return { results: results, possiblyTruncated: possiblyTruncated, totalFetched: items.length, futureDatedSkipped: futureDatedSkipped };
 }
 
 document.getElementById("loadBtn").addEventListener("click", async function() {
@@ -1437,8 +1453,12 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 
     loadedTransactions = receiptResult.results.concat(paymentResult.results, expenseClaimResults.results, purchaseInvoiceResults.results, payslipResults.results);
 
+    const totalFutureDatedSkipped = (receiptResult.futureDatedSkipped || 0) + (paymentResult.futureDatedSkipped || 0) +
+      (expenseClaimResults.futureDatedSkipped || 0) + (purchaseInvoiceResults.futureDatedSkipped || 0) + (payslipResults.futureDatedSkipped || 0);
+    const futureDatedNote = totalFutureDatedSkipped > 0 ? (" " + totalFutureDatedSkipped + " future-dated transaction(s) held back until their date arrives.") : "";
+
     if (loadedTransactions.length === 0) {
-      showStatus("err", "No not-yet-exported transactions found for the selected account(s). If you expect some, check the resolved-fields status above, and that the account picker matches what you expect.");
+      showStatus("err", "No not-yet-exported transactions found for the selected account(s)." + futureDatedNote + " If you expect more, check the resolved-fields status above, and that the account picker matches what you expect.");
       document.getElementById("reviewSection").style.display = "none";
       return;
     }
@@ -1448,9 +1468,9 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
     if (receiptResult.possiblyTruncated || paymentResult.possiblyTruncated || expenseClaimResults.possiblyTruncated || purchaseInvoiceResults.possiblyTruncated || payslipResults.possiblyTruncated) {
       showStatus("err",
         "Loaded " + loadedTransactions.length + " transaction(s), but one or more sources are right at the fetch limit (" + FETCH_PAGE_SIZE + "). " +
-        "Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing.");
+        "Some not-yet-downloaded transactions may exist beyond what was fetched. Do not rely on this export as complete — increase FETCH_PAGE_SIZE, or cross-check manually, before filing." + futureDatedNote);
     } else {
-      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) — " + receiptResult.totalFetched + " receipt(s), " + paymentResult.totalFetched + " payment(s), " + expenseClaimResults.totalFetched + " expense claim(s), " + purchaseInvoiceResults.totalFetched + " purchase invoice(s), " + payslipResults.totalFetched + " payslip(s) checked in total. Review below before generating XML.");
+      showStatus("ok", "Loaded " + loadedTransactions.length + " not-yet-downloaded transaction(s) — " + receiptResult.totalFetched + " receipt(s), " + paymentResult.totalFetched + " payment(s), " + expenseClaimResults.totalFetched + " expense claim(s), " + purchaseInvoiceResults.totalFetched + " purchase invoice(s), " + payslipResults.totalFetched + " payslip(s) checked in total." + futureDatedNote + " Review below before generating XML.");
     }
   } catch (err) {
     showStatus("err", "Failed to load: " + err.message);
