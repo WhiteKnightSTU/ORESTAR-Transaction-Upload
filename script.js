@@ -1367,27 +1367,29 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
         expendContactInfo: expendContactInfo,
         transactionIdFieldGuid: downloadedFieldId
       });
-      results.push({
-        source: sourceLabel + " (Remainder)",
-        key: key,
-        formPath: formPath,
-        date: tranDate,
-        enteredDate: enteredDate,
-        accountName: acctRef.name || acctRef.key || "(unknown)",
-        amount: remainderAmount,
-        contactName: contactName,
-        contactInfo: contactInfo,
-        typeCode: typeCode,
-        subCode: subCode,
-        description: description,
-        paymentMethod: paymentMethod,
-        checkNo: checkNo,
-        apInvoiceRefs: apInvoiceRefs,
-        tranPurposeCodes: tranPurposeCodes,
-        expendContactName: expendContactName,
-        expendContactInfo: expendContactInfo,
-        transactionIdFieldGuid: downloadedFieldId
-      });
+      if (remainderAmount > 0) {
+        results.push({
+          source: sourceLabel + " (Remainder)",
+          key: key,
+          formPath: formPath,
+          date: tranDate,
+          enteredDate: enteredDate,
+          accountName: acctRef.name || acctRef.key || "(unknown)",
+          amount: remainderAmount,
+          contactName: contactName,
+          contactInfo: contactInfo,
+          typeCode: typeCode,
+          subCode: subCode,
+          description: description,
+          paymentMethod: paymentMethod,
+          checkNo: checkNo,
+          apInvoiceRefs: apInvoiceRefs,
+          tranPurposeCodes: tranPurposeCodes,
+          expendContactName: expendContactName,
+          expendContactInfo: expendContactInfo,
+          transactionIdFieldGuid: downloadedFieldId
+        });
+      }
     } else {
       results.push({
         source: sourceLabel,
