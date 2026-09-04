@@ -626,7 +626,6 @@ let contactRecordCache = {};
 // pattern. Looks up a Purchase Invoice's own Transaction ID field value —
 // if it was already filed in an earlier export, that's the real ORESTAR id
 // we need for associated-tran; if blank, it hasn't been filed yet.
-let invoiceTxnIdCache = {};
 // CRITICAL: PUT appears to replace the ENTIRE resource in Manager's API,
 // not merge fields — a partial body (just a custom field) wiped out Date,
 // Amount, linked Customer/Supplier, and Lines on real records. Every write
@@ -732,18 +731,50 @@ async function resolveDeductionItemNameViaList(key) {
   return null;
 }
 
-async function resolveInvoiceTransactionId(key) {
-  if (invoiceTxnIdCache[key] !== undefined) return invoiceTxnIdCache[key];
+let invoiceInfoCache = {};
+// Manager tracks running balances live — the invoice's CURRENT balance
+// already reflects every payment recorded against it (including the one
+// currently being processed, since it's a real Manager record by the time
+// we're reading it). So "is this invoice fully paid off" is just "is the
+// current balance zero (or effectively zero)" — no need to reconstruct
+// payment history ourselves.
+//
+// UNCONFIRMED: the exact field name Manager uses for a Purchase Invoice's
+// remaining balance. Trying the most plausible candidates; if none match,
+// logs the full raw record so the real field name can be found directly,
+// same approach that's resolved every other field-name mystery in this
+// project. Falls back to NOT marking the invoice complete when the balance
+// can't be determined — the safer default, since falsely claiming a debt
+// is paid off is worse than under-claiming it.
+async function resolveInvoiceInfo(key) {
+  if (invoiceInfoCache[key] !== undefined) return invoiceInfoCache[key];
   try {
     const rec = await managerApi("GET", "/api2/purchase-invoice-form/" + key);
     const txnId = getCustomFieldValue(rec, resolvedGuids.transactionId, "number");
-    const result = (txnId !== undefined && txnId !== null && txnId !== "") ? String(txnId) : null;
-    invoiceTxnIdCache[key] = result;
+    const existingTxnId = (txnId !== undefined && txnId !== null && txnId !== "") ? String(txnId) : null;
+
+    const balanceCandidates = [
+      rec.Balance, rec.balance, rec.AmountDue, rec.amountDue,
+      rec.BalanceDue, rec.balanceDue, rec.OutstandingBalance, rec.outstandingBalance,
+      rec.RemainingBalance, rec.remainingBalance
+    ];
+    const rawBalance = balanceCandidates.find(function(v) { return v !== undefined && v !== null; });
+    let balance = null;
+    if (rawBalance !== undefined) {
+      balance = getAmountValue(rawBalance);
+    } else {
+      console.warn("[ORESTAR] Could not find a balance/amount-due field on Purchase Invoice " + key + " — completeness will default to \"not complete\" (N) for this invoice until the real field name is found. Raw top-level fields:", Object.keys(rec));
+      console.log("[ORESTAR] Purchase Invoice " + key + " full detail as JSON string: " + JSON.stringify(rec));
+    }
+
+    const result = { existingTxnId: existingTxnId, balance: balance };
+    invoiceInfoCache[key] = result;
     return result;
   } catch (e) {
     console.warn("[ORESTAR] Could not resolve Purchase Invoice " + key + ":", e.message);
-    invoiceTxnIdCache[key] = null;
-    return null;
+    const result = { existingTxnId: null, balance: null };
+    invoiceInfoCache[key] = result;
+    return result;
   }
 }
 
@@ -1328,7 +1359,9 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     // If this Payment pays off one or more Purchase Invoices (filed
     // separately as Accounts Payable), it must be filed as a plain Cash
     // Expenditure regardless of any custom field, and linked back to the
-    // originating AP transaction(s) via associated-tran.
+    // originating AP transaction(s) via associated-tran. A single payment
+    // can pay off multiple invoices at once — each gets its own
+    // associated-tran entry with its own real completeness flag.
     let apInvoiceRefs = [];
     if (sourceLabel !== "Purchase Invoice (AP)") {
       const invoiceKeys = extractInvoiceLinks(detail, item);
@@ -1336,8 +1369,8 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
         typeCode = "E";
         subCode = "CE";
         for (let vi = 0; vi < invoiceKeys.length; vi++) {
-          const existingTxnId = await resolveInvoiceTransactionId(invoiceKeys[vi]);
-          apInvoiceRefs.push({ key: invoiceKeys[vi], existingTxnId: existingTxnId });
+          const info = await resolveInvoiceInfo(invoiceKeys[vi]);
+          apInvoiceRefs.push({ key: invoiceKeys[vi], existingTxnId: info.existingTxnId, balance: info.balance });
         }
       }
     }
@@ -1482,6 +1515,9 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 function renderReview() {
   document.getElementById("reviewSection").style.display = "block";
   document.getElementById("txnIdSection").style.display = "none";
+  const apWarningEl = document.getElementById("apValidationWarning");
+  apWarningEl.className = "";
+  apWarningEl.textContent = "";
   const tbody = document.getElementById("tranBody");
   tbody.innerHTML = "";
 
@@ -1844,6 +1880,42 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     showStatus("err", missingRequiredDescription.length + " transaction(s) have a Transaction Purpose code (G or T) that requires a Description, but the Description is blank — fill those in above before generating.");
     return;
   }
+
+  // AP payoff validation: every linked invoice must either already have a
+  // real ORESTAR Transaction ID, or be present in this same batch (so it
+  // gets a local id), AND its live balance must be known so completeness
+  // can be determined accurately — neither of these is safe to silently
+  // guess at, so both block generation entirely rather than just warning
+  // after the fact.
+  const apWarningEl = document.getElementById("apValidationWarning");
+  const invoiceKeysInBatch = {};
+  loadedTransactions.forEach(function(t) {
+    if (t.source === "Purchase Invoice (AP)") invoiceKeysInBatch[t.key] = true;
+  });
+  const unlinkedApIssues = [];
+  const unknownBalanceIssues = [];
+  loadedTransactions.forEach(function(t) {
+    (t.apInvoiceRefs || []).forEach(function(ref) {
+      const isLinkable = !!ref.existingTxnId || !!invoiceKeysInBatch[ref.key];
+      if (!isLinkable) {
+        unlinkedApIssues.push(t.contactName + " (" + t.date + ", $" + t.amount + ") pays off invoice " + ref.key + ", which hasn't been filed yet and isn't in this batch — export/file that Purchase Invoice first.");
+      } else if (ref.balance === null || ref.balance === undefined) {
+        unknownBalanceIssues.push(t.contactName + " (" + t.date + ", $" + t.amount + ") pays off invoice " + ref.key + ", but its balance couldn't be read — completeness can't be determined.");
+      }
+    });
+  });
+  if (unlinkedApIssues.length > 0 || unknownBalanceIssues.length > 0) {
+    let msg = "Generation blocked — AP payoff issue(s) found:\n";
+    if (unlinkedApIssues.length > 0) msg += "\n" + unlinkedApIssues.length + " invoice(s) not linkable:\n" + unlinkedApIssues.join("\n");
+    if (unknownBalanceIssues.length > 0) msg += "\n\n" + unknownBalanceIssues.length + " invoice(s) with unknown balance:\n" + unknownBalanceIssues.join("\n");
+    apWarningEl.className = "err";
+    apWarningEl.textContent = msg;
+    console.log("[ORESTAR] Blocked: AP payoff issues —", unlinkedApIssues, unknownBalanceIssues);
+    return;
+  }
+  apWarningEl.className = "";
+  apWarningEl.textContent = "";
+
   console.log("[ORESTAR] All validation passed, proceeding to build XML…");
   lastGeneratedFilerId = filerId;
 
@@ -1891,27 +1963,23 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     if (t.source === "Purchase Invoice (AP)") invoiceKeyToLocalTranId[t.key] = localTranIds[i];
   });
 
-  const unlinkedApWarnings = [];
   const tranXmlParts = loadedTransactions.map(function(t, i) {
     let associatedTrans = [];
     if (t.apInvoiceRefs && t.apInvoiceRefs.length > 0) {
       t.apInvoiceRefs.forEach(function(ref) {
         const linkedId = ref.existingTxnId || invoiceKeyToLocalTranId[ref.key];
-        if (linkedId) {
-          associatedTrans.push({ id: linkedId, complete: true });
-        } else {
-          unlinkedApWarnings.push(t.contactName + " (" + t.date + ", $" + t.amount + ") pays off an invoice that hasn't been filed yet and isn't in this batch — export/file that Purchase Invoice first.");
-        }
+        // Manager tracks running balances live — a balance at or below zero
+        // (small epsilon for float precision only) means this invoice is
+        // now fully (100%) paid off. Any real remaining balance, however
+        // small, is N. Both "unlinkable" and "unknown balance" cases were
+        // already validated and blocked before reaching this point.
+        const complete = ref.balance <= 0.005;
+        associatedTrans.push({ id: linkedId, complete: complete });
       });
     }
     const expendId = t.expendContactName ? contactIdByName[t.expendContactName] : null;
     return buildTransactionXml(localTranIds[i], contactIdByName[t.contactName], t, associatedTrans, expendId);
   });
-
-  const apWarningText = unlinkedApWarnings.length > 0
-    ? "\n\n⚠ " + unlinkedApWarnings.length + " AP payoff(s) couldn't be linked (filed as plain Cash Expenditures, no associated-tran):\n" +
-      unlinkedApWarnings.slice(0, 5).join("\n") + (unlinkedApWarnings.length > 5 ? "\n…and " + (unlinkedApWarnings.length - 5) + " more" : "")
-    : "";
 
   const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<campaign-finance-transactions xmlns="http://www.state.or.us/sos/ebs2/ce/dataobject" ' +
@@ -1941,8 +2009,8 @@ document.getElementById("generateBtn").addEventListener("click", async function(
   const autoSaveFailText = autoSaveFailures.length > 0
     ? ("\n\n⚠ " + autoSaveFailures.length + " Contact ID(s) failed to auto-save (XML still generated fine, just re-run \"Save Contact IDs to Manager\" to retry):\n" + autoSaveFailures.slice(0, 5).join("\n"))
     : "";
-  showStatus((apWarningText || autoSaveFailText) ? "err" : "ok",
-    "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save." + autoSaveText + apWarningText + autoSaveFailText);
+  showStatus(autoSaveFailText ? "err" : "ok",
+    "XML generated. Review it below, download it, and upload it through ORESTAR's Upload File page. Once ORESTAR gives you back Transaction IDs, enter them in the table below and save." + autoSaveText + autoSaveFailText);
 });
 
 function renderTxnIdTable() {
