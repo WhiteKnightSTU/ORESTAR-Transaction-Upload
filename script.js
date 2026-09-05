@@ -767,12 +767,23 @@ async function resolveInvoiceInfo(key) {
       console.log("[ORESTAR] Purchase Invoice " + key + " full detail as JSON string: " + JSON.stringify(rec));
     }
 
-    const result = { existingTxnId: existingTxnId, balance: balance };
+    const result = { existingTxnId: existingTxnId, balance: balance, deleted: false };
     invoiceInfoCache[key] = result;
     return result;
   } catch (e) {
-    console.warn("[ORESTAR] Could not resolve Purchase Invoice " + key + ":", e.message);
-    const result = { existingTxnId: null, balance: null };
+    // A 404 specifically means the invoice record itself no longer exists
+    // (confirmed real case: deleted from Manager after the payment was
+    // originally recorded against it) — that link genuinely can't apply
+    // anymore, so it's dropped rather than treated as an error. Any other
+    // failure (network issue, wrong endpoint, etc.) is NOT assumed to mean
+    // deletion — it still surfaces as "not linkable" via the normal path.
+    const isConfirmedDeleted = /HTTP 404/.test(e.message);
+    if (isConfirmedDeleted) {
+      console.log("[ORESTAR] Purchase Invoice " + key + " no longer exists (deleted from Manager) — its associated-tran link will be dropped; the payment still files normally.");
+    } else {
+      console.warn("[ORESTAR] Could not resolve Purchase Invoice " + key + ":", e.message);
+    }
+    const result = { existingTxnId: null, balance: null, deleted: isConfirmedDeleted };
     invoiceInfoCache[key] = result;
     return result;
   }
@@ -1075,25 +1086,32 @@ async function resolveContactInfo(detail, item, sourceLabel) {
 // Lines) but this genuinely needs verification against a real payment that
 // pays an invoice, the same way every other field name in this file got
 // nailed down through live testing.
-function extractInvoiceLinks(detail, item) {
-  const keys = [];
-  function addKey(v) {
+function extractInvoiceLinks(detail, item, diagContext) {
+  const found = []; // { key, source }
+  function addKey(v, sourceLabel) {
     if (!v) return;
-    if (typeof v === "string") { keys.push(v); return; }
-    if (typeof v === "object" && (v.key || v.Key)) { keys.push(v.key || v.Key); return; }
-    if (Array.isArray(v)) { v.forEach(addKey); return; }
+    if (typeof v === "string") { found.push({ key: v, source: sourceLabel }); return; }
+    if (typeof v === "object" && (v.key || v.Key)) { found.push({ key: v.key || v.Key, source: sourceLabel }); return; }
+    if (Array.isArray(v)) { v.forEach(function(x) { addKey(x, sourceLabel); }); return; }
   }
-  addKey(detail && detail.PurchaseInvoice);
-  addKey(detail && detail.purchaseInvoice);
-  addKey(detail && detail.Invoice);
-  addKey(detail && detail.Invoices);
-  addKey(detail && detail.invoices);
+  addKey(detail && detail.PurchaseInvoice, "detail.PurchaseInvoice");
+  addKey(detail && detail.purchaseInvoice, "detail.purchaseInvoice");
+  addKey(detail && detail.Invoice, "detail.Invoice (unconfirmed, generic — may be wrong)");
+  addKey(detail && detail.Invoices, "detail.Invoices (unconfirmed, generic — may be wrong)");
+  addKey(detail && detail.invoices, "detail.invoices (unconfirmed, generic — may be wrong)");
   const lines = (detail && (detail.Lines || detail.lines)) || (item && (item.Lines || item.lines));
   if (Array.isArray(lines)) {
-    lines.forEach(function(l) {
-      addKey(l.PurchaseInvoice || l.purchaseInvoice || l.Invoice || l.invoice);
+    lines.forEach(function(l, li) {
+      addKey(l.PurchaseInvoice, "lines[" + li + "].PurchaseInvoice");
+      addKey(l.purchaseInvoice, "lines[" + li + "].purchaseInvoice");
+      addKey(l.Invoice, "lines[" + li + "].Invoice (unconfirmed, generic — may be wrong)");
+      addKey(l.invoice, "lines[" + li + "].invoice (unconfirmed, generic — may be wrong)");
     });
   }
+  if (found.length > 0) {
+    console.log("[ORESTAR] extractInvoiceLinks" + (diagContext ? " (" + diagContext + ")" : "") + " found link(s):", found, "— raw Lines:", lines);
+  }
+  const keys = found.map(function(f) { return f.key; });
   // De-duplicate
   return keys.filter(function(k, i, arr) { return arr.indexOf(k) === i; });
 }
@@ -1364,13 +1382,13 @@ async function loadCollection(listPath, formPath, sourceLabel, typeSubtypeFieldI
     // associated-tran entry with its own real completeness flag.
     let apInvoiceRefs = [];
     if (sourceLabel !== "Purchase Invoice (AP)") {
-      const invoiceKeys = extractInvoiceLinks(detail, item);
+      const invoiceKeys = extractInvoiceLinks(detail, item, sourceLabel + " " + key);
       if (invoiceKeys.length > 0) {
         typeCode = "E";
         subCode = "CE";
         for (let vi = 0; vi < invoiceKeys.length; vi++) {
           const info = await resolveInvoiceInfo(invoiceKeys[vi]);
-          apInvoiceRefs.push({ key: invoiceKeys[vi], existingTxnId: info.existingTxnId, balance: info.balance });
+          apInvoiceRefs.push({ key: invoiceKeys[vi], existingTxnId: info.existingTxnId, balance: info.balance, deleted: info.deleted });
         }
       }
     }
@@ -1896,6 +1914,7 @@ document.getElementById("generateBtn").addEventListener("click", async function(
   const unknownBalanceIssues = [];
   loadedTransactions.forEach(function(t) {
     (t.apInvoiceRefs || []).forEach(function(ref) {
+      if (ref.deleted) return; // invoice no longer exists — link dropped, not an issue to report
       const isLinkable = !!ref.existingTxnId || !!invoiceKeysInBatch[ref.key];
       if (!isLinkable) {
         unlinkedApIssues.push(t.contactName + " (" + t.date + ", $" + t.amount + ") pays off invoice " + ref.key + ", which hasn't been filed yet and isn't in this batch — export/file that Purchase Invoice first.");
@@ -1967,6 +1986,7 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     let associatedTrans = [];
     if (t.apInvoiceRefs && t.apInvoiceRefs.length > 0) {
       t.apInvoiceRefs.forEach(function(ref) {
+        if (ref.deleted) return; // invoice no longer exists — no associated-tran for it, payment still files normally
         const linkedId = ref.existingTxnId || invoiceKeyToLocalTranId[ref.key];
         // Manager tracks running balances live — a balance at or below zero
         // (small epsilon for float precision only) means this invoice is
