@@ -2,150 +2,244 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ORESTAR Export</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORESTAR Transaction Upload</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --accent: #2b6cb0;
-    --border: #d5dbe3;
-    --muted: #6b7280;
-    --danger: #c0392b;
-    --ok: #1f7a3d;
-    --warn: #8a6100;
-  }
-  * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-    margin: 0;
-    padding: 16px;
-    color: #1a202c;
-    font-size: 13.5px;
-  }
-  h2 { margin: 0 0 4px 0; font-size: 16px; }
-  h3 { margin: 18px 0 8px; font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .subtitle { color: var(--muted); margin-bottom: 14px; font-size: 12.5px; }
-  .banner {
-    background: #eef4fb; border: 1px solid #cfe0f3; color: #1a4971;
-    padding: 10px 12px; border-radius: 6px; font-size: 12.5px; margin-bottom: 14px;
-  }
-  .banner.warn { background: #fff8e6; border-color: #f0dca0; color: var(--warn); }
-  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px 14px; margin-bottom: 14px; }
-  legend { padding: 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  label { display: block; margin-top: 8px; margin-bottom: 3px; font-weight: 600; font-size: 12px; }
-  label .hint { font-weight: 400; color: var(--muted); display: block; font-size: 11px; margin-top: 1px; }
-  input, select, textarea {
-    width: 100%; padding: 6px 7px; border: 1px solid var(--border); border-radius: 5px;
-    font-size: 12.5px; font-family: inherit;
-  }
-  input[readonly] { background: #f7f8fa; color: var(--muted); }
-  textarea { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
-  .row > div { flex: 1; min-width: 140px; }
-  button {
-    background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 6px;
-    font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 10px; margin-right: 8px;
-  }
-  button.secondary { background: #6b7280; }
-  button.danger-ok { background: var(--ok); }
-  button:disabled { opacity: .5; cursor: default; }
-  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-  th, td { border: 1px solid var(--border); padding: 5px 6px; vertical-align: top; }
-  th { background: #f7f8fa; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); }
-  td input, td select { font-size: 11.5px; padding: 4px 5px; min-width: 90px; }
-  #status, #markStatus, #apValidationWarning { margin-top: 10px; padding: 9px 11px; border-radius: 6px; font-size: 12.5px; display: none; white-space: pre-wrap; word-break: break-word; }
-  #status.ok, #markStatus.ok { display: block; background: #eafaf0; color: var(--ok); border: 1px solid #bfe9cf; }
-  #status.err, #markStatus.err, #apValidationWarning.err { display: block; background: #fdecea; color: var(--danger); border: 1px solid #f5c2bb; }
-  #status.pending, #markStatus.pending { display: block; background: #eef4fb; color: var(--accent); border: 1px solid #cfe0f3; }
-  .contact-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
-  .contact-card h4 { margin: 0 0 6px; font-size: 12.5px; }
-  .small { font-size: 11px; color: var(--muted); }
-  .account-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
-  .account-list label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; font-size: 12.5px; }
-  .account-list input[type="checkbox"] { width: auto; }
+  :root{--ink:#1c1e24;--navy:#162a49;--navy-hover:#0e1c33;--btn-fg:#fff;--paper:#f6f6f4;--card:#fff;--body:#454a55;--sec:#545963;--muted:#5b6070;--rule:#e2e2dd;--hair:#efefea;--field:#cdcdc6;--red:#a11c2d;--red-bg:#fff;
+    --serif:'Crimson Pro',Georgia,serif;--sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif;--mono:'IBM Plex Mono',ui-monospace,Consolas,monospace}
+  [data-theme="dark"]{--ink:#eef1f6;--navy:#c8d6ef;--navy-hover:#e2e9f6;--btn-fg:#101c2f;--paper:#101c2f;--card:#16263f;--body:#c3ccdb;--sec:#b6c0d1;--muted:#93a0b6;--rule:#273854;--hair:#1f2f4a;--field:#3c4d69;--red:#f0909f;--red-bg:#16263f}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);padding-bottom:72px}
+  a{color:var(--navy);text-decoration:none;border-bottom:1px solid var(--field)}
+  a:hover{color:var(--navy-hover);border-bottom-color:var(--navy)}
+  input,select,button,textarea{font:inherit}
+  ::placeholder{color:var(--muted);opacity:1}
+
+  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    background:var(--paper);border-bottom:1px solid var(--rule);padding:14px clamp(16px,5vw,40px)}
+  .lockup img{display:block;height:44px;width:auto}
+  .lockup-dark{display:none;align-items:center;gap:11px}
+  .lockup-dark img:first-child{height:38px}
+  .lockup-dark img:last-child{height:30px}
+  [data-theme="dark"] .lockup-light{display:none}
+  [data-theme="dark"] .lockup-dark{display:flex}
+  .hdr-right{display:flex;align-items:center;gap:16px}
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0}
+  .hdr-meta{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);text-align:right}
+
+  main{max-width:860px;margin:0 auto;padding:clamp(20px,5vw,40px) clamp(16px,5vw,40px) 0}
+  h1{font-weight:400;font-size:clamp(26px,6vw,38px);line-height:1.06;letter-spacing:-.022em;margin:8px 0 10px}
+  .lede{font-family:var(--sans);font-size:15px;color:var(--body);line-height:1.55;margin:0;max-width:36em}
+  p.note{font-family:var(--sans);font-size:13px;color:var(--body);line-height:1.55;margin:0 0 16px;max-width:34em}
+  p.hint{font-family:var(--sans);font-size:12.5px;color:var(--muted);line-height:1.5;margin:6px 0 0}
+
+  .stage{border-top:1px solid var(--rule)}
+  .stage:first-of-type{border-top:2px solid var(--ink);margin-top:26px}
+  .stage:last-of-type{border-bottom:1px solid var(--rule)}
+  .stage-head{width:100%;display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:baseline;text-align:left;
+    background:none;border:none;padding:15px 0;cursor:pointer;color:var(--ink)}
+  .stage-head:hover:not([disabled]){background:var(--hair)}
+  .stage-head[disabled]{cursor:default;opacity:.55}
+  .stage-num{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+  .stage-title{font-family:var(--serif);font-size:19px}
+  .stage-sum{font-family:var(--mono);font-size:12.5px;color:var(--navy);text-align:right}
+  .stage-body{padding:14px 0 28px}
+  .stage[data-open="false"] .stage-body{display:none}
+  .stage[data-open="true"] .stage-head{display:none}
+
+  label{display:block;font-family:var(--sans);font-size:12.5px;color:var(--sec);margin-bottom:5px}
+  input[type=text],select,textarea{width:100%;font-family:var(--sans);font-size:14px;color:var(--ink);background:var(--paper);
+    border:1px solid var(--field);border-radius:2px;padding:9px 10px}
+  input.mono,textarea.mono{font-family:var(--mono);font-size:13.5px}
+  textarea{resize:vertical}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .btn{font-family:var(--sans);font-size:14px;font-weight:500;background:var(--navy);color:var(--btn-fg);border:none;border-radius:2px;padding:13px 24px;cursor:pointer}
+  .btn:disabled{opacity:.45;cursor:default}
+  .btn-quiet{font-family:var(--sans);font-size:13px;background:none;color:var(--navy);border:1px solid var(--field);border-radius:2px;padding:11px 16px;cursor:pointer}
+  .btn-quiet:hover:not([disabled]){border-color:var(--navy)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:20px}
+
+  #resolvedFieldsStatus{font-family:var(--sans);font-size:13px;color:var(--sec);line-height:2.1;margin-top:4px}
+  .account-list{display:flex;flex-direction:column;gap:2px;margin-top:2px}
+  .account-list label{display:flex;align-items:baseline;gap:9px;font-family:var(--sans);font-size:13.5px;color:var(--body);cursor:pointer;margin:0;padding:5px 0}
+  .account-list input[type=checkbox]{width:auto;margin:0;accent-color:#162a49}
+  .kind{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  #resolvedFilerId{font-family:var(--mono);font-size:18px;color:var(--navy);background:transparent;border:none;padding:0;width:100%}
+
+  #status,#markStatus,#contactIdStatus,#apValidationWarning{font-family:var(--sans);font-size:13px;line-height:1.55;
+    color:var(--body);margin-top:14px;white-space:pre-wrap;word-break:break-word;display:none}
+  #status.ok,#status.pending,#markStatus.ok,#markStatus.pending{display:block;border-left:2px solid var(--navy);padding-left:12px}
+  #status.err,#markStatus.err,#apValidationWarning.err{display:block;border-left:2px solid var(--red);padding-left:12px;color:var(--red)}
+  #contactIdStatus{display:block;color:var(--muted);font-size:12.5px}
+
+  .thead,.trow-head,.idrow{display:grid;gap:10px;align-items:baseline}
+  .thead,.trow-head{grid-template-columns:84px minmax(110px,1fr) 92px 118px 104px}
+  .thead{padding:0 0 8px;border-bottom:1px solid var(--ink);font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .thead .r,.trow-head .r{text-align:right}
+  .trow{border-bottom:1px solid var(--hair)}
+  .trow-head{width:100%;text-align:left;background:none;border:none;padding:12px 0;cursor:pointer;color:var(--ink)}
+  .trow-head:hover{background:var(--hair)}
+  .c-date,.c-type{font-family:var(--mono);font-size:12px;color:var(--body)}
+  .c-name{font-family:var(--sans);font-size:13.5px}
+  .c-amt{font-family:var(--mono);font-size:12.5px;text-align:right}
+  .c-status{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;text-align:right;color:var(--navy)}
+  .c-status.req{color:var(--red)}
+  .c-status.note{color:var(--muted)}
+
+  .drawer{background:var(--card);border-top:1px solid var(--rule);padding:20px 18px 22px;margin-bottom:2px}
+  .drawer h4{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);font-weight:400;margin:0 0 12px}
+  .drawer .split{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin:26px 0 12px;border-top:1px solid var(--rule);padding-top:16px}
+  .drawer .scope{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--navy);margin:0}
+  .flag{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline;padding:0 0 10px}
+  .flag .lvl{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .flag .lvl.req{color:var(--red)}
+  .flag .msg{font-family:var(--sans);font-size:13px;color:var(--body);line-height:1.5}
+  .confirm{border:1px solid var(--navy);padding:14px 16px;margin-bottom:14px}
+  .confirm p{margin:0 0 4px;font-family:var(--sans);font-size:13.5px;color:var(--ink);line-height:1.5}
+  .confirm .detail{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 0 12px}
+  .confirm .row{display:flex;gap:10px;flex-wrap:wrap}
+  .banner{border:1px solid var(--red);background:var(--red-bg);padding:16px 18px;margin:22px 0 0}
+  .banner .lvl{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--red);margin:0 0 6px}
+  .banner p{font-family:var(--sans);font-size:13.5px;color:var(--body);line-height:1.55;margin:0}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
+  .stat{background:var(--card);padding:16px 18px}
+  .stat .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .stat .val{font-family:var(--mono);font-size:19px;color:var(--ink);margin:0}
+  .stat .sub{font-family:var(--sans);font-size:12px;color:var(--muted);margin:5px 0 0;line-height:1.45}
+  #xmlWrap[hidden]{display:none}
+  #xmlOutput{margin-top:16px;background:var(--card);border:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--body);padding:14px;min-height:280px}
+  .filename{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+  .idrow{grid-template-columns:84px minmax(110px,1fr) 92px 130px;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair)}
+  .idhead{grid-template-columns:84px minmax(110px,1fr) 92px 130px;padding:0 0 8px;border-bottom:1px solid var(--ink);
+    font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:grid;gap:10px}
+  .idrow input{padding:8px 9px}
+
+  .diag{border:1px solid var(--rule);background:var(--card);padding:14px 16px;margin-top:18px}
+  .diag summary{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);cursor:pointer}
+  .diag table{width:100%;border-collapse:collapse;margin-top:10px;font-family:var(--mono);font-size:11.5px;color:var(--body)}
+  .diag td,.diag th{text-align:left;padding:5px 8px 5px 0;border-top:1px solid var(--hair);font-weight:400}
+  .diag th{color:var(--muted);letter-spacing:.1em;text-transform:uppercase;font-size:10px}
+  .small{font-family:var(--sans);font-size:12.5px;color:var(--muted);line-height:1.5}
+  footer{max-width:860px;margin:0 auto;padding:22px clamp(16px,5vw,40px) 0}
 </style>
 </head>
-<body>
+<body data-theme="light">
 
-<h2>ORESTAR Transaction Export</h2>
-<div class="subtitle">Pulls Receipts and Payments from Manager that haven't been exported yet, and builds an ORESTAR-compliant XML file.</div>
-
-<div class="banner">
-This runs as a Manager Custom Button — embedded inside Manager, talking to it via its own internal API proxy. No token, URL, or business name to configure; Manager handles all of that automatically. It generates a file for <strong>manual upload</strong> via ORESTAR's "Upload File" feature — it does not file anything automatically, the candidate or treasurer must still log into ORESTAR to review and file.
-</div>
-
-<fieldset>
-  <legend>Custom Fields</legend>
-  <div class="small" style="margin-bottom:6px;">
-    Field GUIDs are resolved automatically by matching the names in <code>config.js</code> against your actual custom fields —
-    nothing to paste in here. "List Custom Field Definitions" is still available if you need to double-check a name.
+<header>
+  <span class="lockup lockup-light"><img src="assets/huwe-lockup.png" alt="Huwe Compliance" width="200" height="52"></span>
+  <span class="lockup lockup-dark"><img src="assets/huwe-mark-mono.png" alt="" width="66" height="50"><img src="assets/huwe-wordmark-mono.png" alt="Huwe Compliance" width="936" height="306"></span>
+  <div class="hdr-right">
+    <div class="hdr-meta" id="hdrMeta">Filer — · Stage 00 of 03</div>
+    <button type="button" class="btn-quiet" id="themeBtn" style="letter-spacing:.12em;text-transform:uppercase;font-size:11px;font-family:var(--mono)">Dark</button>
   </div>
-  <button id="listFieldsBtn" type="button" class="secondary">List Custom Field Definitions</button>
-  <div id="fieldsListResult" style="margin-top:8px;"></div>
+</header>
 
-  <label>Resolved Fields <span class="hint">Populated after "Load Accounts &amp; Resolve Fields" below — check these match before proceeding.</span></label>
-  <div id="resolvedFieldsStatus" class="small">(not yet resolved)</div>
+<main>
+  <p class="eyebrow">Huwe Compliance — Oregon Filing</p>
+  <h1>Prepare the ORESTAR upload</h1>
+  <p class="lede">Pulls every Receipt, Payment, Expense Claim, Purchase Invoice and payroll-forgiven claim that has not been exported yet, and builds one ORESTAR-compliant XML file for manual upload.</p>
 
-  <label style="margin-top:12px;">Resolved Filer ID <span class="hint">Fetched automatically from Business Details — verify this looks right before filing.</span></label>
-  <input type="text" id="resolvedFilerId" readonly placeholder="(will populate after Load Accounts)">
+  <section class="stage" id="stage0" data-open="true">
+    <button type="button" class="stage-head" data-stage="0">
+      <span class="stage-num">00</span><span class="stage-title">Setup</span><span class="stage-sum" id="sum0">fields not resolved</span>
+    </button>
+    <div class="stage-body">
+      <p class="eyebrow">00 — Setup</p>
+      <p class="note" style="margin-top:6px">Custom fields are matched by name against Manager's own definitions — no GUIDs to paste. Check for any cross before loading transactions.</p>
 
-  <label>Bank / Cash Accounts to include</label>
-  <div class="account-list" id="accountList"><span class="small">Click "Load Accounts &amp; Resolve Fields" below.</span></div>
-  <button id="loadAccountsBtn" type="button" class="secondary">Load Accounts &amp; Resolve Fields</button>
+      <p class="eyebrow">Resolved fields</p>
+      <div id="resolvedFieldsStatus" class="small">(not yet resolved)</div>
 
-  <div style="margin-top:14px;">
-    <button id="loadBtn" type="button">Load Not-Yet-Downloaded Transactions</button>
-  </div>
-</fieldset>
+      <details class="diag">
+        <summary>Diagnostics</summary>
+        <p class="small" style="margin:10px 0">Names in <code>config.js</code> are matched against these definitions. Use this to confirm a name after renaming a field in Manager.</p>
+        <button id="listFieldsBtn" type="button" class="btn-quiet">List custom field definitions</button>
+        <div id="fieldsListResult" style="margin-top:8px"></div>
+      </details>
 
-<div id="status"></div>
+      <div class="grid" style="margin-top:24px">
+        <div>
+          <p class="eyebrow">Filer ID</p>
+          <input type="text" id="resolvedFilerId" readonly placeholder="(after loading accounts)">
+          <p class="hint">From Business Details → PAC ID #</p>
+        </div>
+        <div>
+          <p class="eyebrow">Accounts to include</p>
+          <div class="account-list" id="accountList"><span class="small">Load accounts to choose.</span></div>
+        </div>
+      </div>
 
-<div id="reviewSection" style="display:none">
-  <h3>1. Review Transactions</h3>
-  <div class="small">Type/Sub-type are read from your shared custom field. Fix anything it didn't capture (a description for "Miscellaneous" categories, a payment method/check number, etc).</div>
-  <table id="tranTable">
-    <thead>
-      <tr>
-        <th>Date</th><th>Entered</th><th>Account</th><th>Amount</th><th>Contact Name</th><th>Type</th><th>Sub-type</th>
-        <th>Description</th><th>Purpose</th><th>Payment Method</th><th>Check #</th><th>Source</th>
-      </tr>
-    </thead>
-    <tbody id="tranBody"></tbody>
-  </table>
-
-  <h3>2. Confirm Contacts</h3>
-  <div class="small">
-    ORESTAR requires each contact classified as Individual/Business/Committee/etc., with a name broken into the right fields.
-    If a contributor's or payee's total for the year is over $100, ORESTAR also expects address (and, for individuals, occupation
-    and employer) — add those here if you have them.
-  </div>
-  <div id="contactsList"></div>
-  <button id="saveContactIdsBtn" type="button" class="secondary">Save Contact IDs to Manager</button>
-  <div id="contactIdStatus" class="small"></div>
-
-  <h3>3. Generate File</h3>
-  <div id="apValidationWarning"></div>
-  <button id="generateBtn" type="button">Generate ORESTAR XML</button>
-  <button id="downloadBtn" type="button" class="secondary" disabled>Download XML</button>
-  <textarea id="xmlOutput" rows="14" readonly style="margin-top:10px; display:none;"></textarea>
-
-  <div id="txnIdSection" style="display:none; margin-top:16px;">
-    <h3>4. Enter ORESTAR Transaction IDs</h3>
-    <div class="small">
-      After you upload the XML to ORESTAR, it assigns a Transaction ID to each transaction. Type each one in below once you have them,
-      then save — this writes them into the Transaction ID field in Manager, which is what keeps these transactions out of your next export.
-      Leave any blank if you don't have that one yet; nothing gets written for a blank row.
+      <div class="actions">
+        <button id="loadAccountsBtn" type="button" class="btn-quiet">Load accounts &amp; resolve fields</button>
+        <button id="loadBtn" type="button" class="btn">Load not-yet-exported transactions</button>
+      </div>
+      <p class="hint">Future-dated transactions are held back until their date arrives.</p>
+      <div id="status"></div>
     </div>
-    <table id="txnIdTable">
-      <thead>
-        <tr><th>Date</th><th>Contact Name</th><th>Amount</th><th>Type</th><th>ORESTAR Transaction ID</th></tr>
-      </thead>
-      <tbody id="txnIdBody"></tbody>
-    </table>
-    <button id="saveTxnIdsBtn" type="button" class="danger-ok">Save Transaction IDs to Manager</button>
-    <div id="markStatus"></div>
-  </div>
-</div>
+  </section>
+
+  <section class="stage" id="stage1" data-open="false" data-locked="true">
+    <button type="button" class="stage-head" data-stage="1" disabled>
+      <span class="stage-num">01</span><span class="stage-title">Transactions</span><span class="stage-sum" id="sum1">locked</span>
+    </button>
+    <div class="stage-body" id="reviewSection">
+      <p class="eyebrow">01 — Transactions</p>
+      <p class="note" style="margin-top:6px">Open a row to edit the transaction and the contact record behind it. Contact edits are written back to the Customer, Supplier or Employee record in Manager.</p>
+      <div class="thead"><span>Date</span><span>Contact</span><span class="r">Amount</span><span>Type</span><span class="r">Status</span></div>
+      <div id="tranBody"></div>
+      <div id="gateBanner"></div>
+      <div class="actions"><button type="button" class="btn" id="toStage2">Continue to generate</button></div>
+    </div>
+  </section>
+
+  <section class="stage" id="stage2" data-open="false" data-locked="true">
+    <button type="button" class="stage-head" data-stage="2" disabled>
+      <span class="stage-num">02</span><span class="stage-title">Generate &amp; download</span><span class="stage-sum" id="sum2">locked</span>
+    </button>
+    <div class="stage-body">
+      <p class="eyebrow">02 — Generate &amp; download</p>
+      <p class="note" style="margin-top:6px">Nothing is written to Manager except new Contact IDs, which are saved back as the file is built.</p>
+      <div id="apValidationWarning"></div>
+      <div class="stats" id="genStats" hidden></div>
+      <div class="actions">
+        <button id="generateBtn" type="button" class="btn">Generate ORESTAR XML</button>
+        <button id="downloadBtn" type="button" class="btn-quiet" disabled>Download XML</button>
+        <button id="viewFileBtn" type="button" class="btn-quiet" hidden>View file</button>
+        <span class="filename" id="fileName"></span>
+      </div>
+      <div id="xmlWrap" hidden><textarea id="xmlOutput" rows="16" readonly></textarea></div>
+      <div style="margin-top:22px;border-top:1px solid var(--rule);padding-top:16px">
+        <button id="saveContactIdsBtn" type="button" class="btn-quiet">Save Contact IDs to Manager</button>
+        <div id="contactIdStatus"></div>
+      </div>
+      <div class="actions"><button type="button" class="btn" id="toStage3" hidden>Continue to transaction IDs</button></div>
+    </div>
+  </section>
+
+  <section class="stage" id="stage3" data-open="false" data-locked="true">
+    <button type="button" class="stage-head" data-stage="3" disabled>
+      <span class="stage-num">03</span><span class="stage-title">ORESTAR transaction IDs</span><span class="stage-sum" id="sum3">locked</span>
+    </button>
+    <div class="stage-body" id="txnIdSection">
+      <p class="eyebrow">03 — ORESTAR transaction IDs</p>
+      <p class="note" style="margin-top:6px">Entering an ID writes it to the Transaction ID field in Manager, which is what keeps that transaction out of the next export. Blank rows are left alone. A record split by fair market value takes one ID — the contribution half.</p>
+      <div class="idhead"><span>Date</span><span>Contact</span><span class="r">Amount</span><span>ORESTAR ID</span></div>
+      <div id="txnIdBody"></div>
+      <div class="actions"><button id="saveTxnIdsBtn" type="button" class="btn">Save to Manager</button></div>
+      <div id="markStatus"></div>
+    </div>
+  </section>
+</main>
+
+<footer><p class="small">This tool prepares a file. Filing is a separate step the candidate or treasurer completes inside ORESTAR.</p></footer>
 
 <script src="config.js"></script>
+<script src="ui.js"></script>
 <script src="script.js"></script>
 </body>
 </html>

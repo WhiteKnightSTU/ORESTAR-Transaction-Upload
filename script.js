@@ -464,7 +464,7 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async funct
       listEl.innerHTML = '<span class="small">No accounts found.</span>';
     } else {
       listEl.innerHTML = availableAccounts.map(function(a, i) {
-        return '<label><input type="checkbox" data-acct-idx="' + i + '" checked> ' + escapeXml(a.name) + ' <span class="small">(' + a.kind + ')</span></label>';
+        return '<label><input type="checkbox" data-acct-idx="' + i + '" checked> ' + escapeXml(a.name) + ' <span class="kind">(' + a.kind + ')</span></label>';
       }).join("");
     }
 
@@ -473,6 +473,7 @@ document.getElementById("loadAccountsBtn").addEventListener("click", async funct
       try {
         const filerId = await fetchFilerId(resolvedGuids.filer);
         document.getElementById("resolvedFilerId").value = filerId;
+        UI.setFilerId(filerId);
         filerNote = " Filer ID resolved: " + filerId + ".";
       } catch (e) {
         document.getElementById("resolvedFilerId").value = "";
@@ -1512,7 +1513,6 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 
     if (loadedTransactions.length === 0) {
       showStatus("err", "No not-yet-exported transactions found for the selected account(s)." + futureDatedNote + " If you expect more, check the resolved-fields status above, and that the account picker matches what you expect.");
-      document.getElementById("reviewSection").style.display = "none";
       return;
     }
 
@@ -1531,88 +1531,16 @@ document.getElementById("loadBtn").addEventListener("click", async function() {
 });
 
 function renderReview() {
-  document.getElementById("reviewSection").style.display = "block";
-  document.getElementById("txnIdSection").style.display = "none";
   const apWarningEl = document.getElementById("apValidationWarning");
   apWarningEl.className = "";
   apWarningEl.textContent = "";
-  const tbody = document.getElementById("tranBody");
-  tbody.innerHTML = "";
 
-  loadedTransactions.forEach(function(t, idx) {
-    if (!contactsByName[t.contactName]) {
-      contactsByName[t.contactName] = buildContactFromInfo(t.contactName, t.contactInfo);
-    }
-    if (t.expendContactName && !contactsByName[t.expendContactName]) {
-      contactsByName[t.expendContactName] = buildContactFromInfo(t.expendContactName, t.expendContactInfo);
-    }
-
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>" + escapeXml(t.date) + "</td>" +
-      '<td class="small">' + escapeXml(t.enteredDate || "—") + "</td>" +
-      '<td class="small">' + escapeXml(t.accountName) + "</td>" +
-      "<td>" + escapeXml(t.amount) + "</td>" +
-      '<td><input data-idx="' + idx + '" data-field="contactName" value="' + escapeXml(t.contactName) + '"></td>' +
-      "<td><select data-idx=\"" + idx + "\" data-field=\"typeCode\">" +
-        Object.entries(TYPE_CODE).map(function(entry) {
-          const label = entry[0], code = entry[1];
-          return '<option value="' + code + '" ' + (code === t.typeCode ? "selected" : "") + ">" + label + " (" + code + ")</option>";
-        }).join("") +
-      "</select></td>" +
-      "<td><select data-idx=\"" + idx + "\" data-field=\"subCode\"></select></td>" +
-      '<td><input data-idx="' + idx + '" data-field="description" value="' + escapeXml(t.description) + '"></td>' +
-      '<td><input data-idx="' + idx + '" data-field="tranPurpose" placeholder="e.g. R or G,T" value="' + escapeXml((t.tranPurposeCodes || []).join(",")) + '"></td>' +
-      "<td><select data-idx=\"" + idx + "\" data-field=\"paymentMethod\">" +
-        PAYMENT_METHODS.map(function(entry) {
-          const code = entry[0], label = entry[1];
-          return '<option value="' + code + '" ' + (code === t.paymentMethod ? "selected" : "") + ">" + label + "</option>";
-        }).join("") +
-      "</select></td>" +
-      '<td><input data-idx="' + idx + '" data-field="checkNo" value="' + escapeXml(t.checkNo) + '"></td>' +
-      '<td class="small">' + t.source + "</td>";
-    tbody.appendChild(tr);
-    populateSubtypeSelect(idx);
+  loadedTransactions.forEach(function(t) {
+    if (!contactsByName[t.contactName]) contactsByName[t.contactName] = buildContactFromInfo(t.contactName, t.contactInfo);
+    if (t.expendContactName && !contactsByName[t.expendContactName]) contactsByName[t.expendContactName] = buildContactFromInfo(t.expendContactName, t.expendContactInfo);
   });
-
-  tbody.querySelectorAll("input, select").forEach(function(el) {
-    el.addEventListener("change", function(e) {
-      const idx = Number(e.target.dataset.idx);
-      const field = e.target.dataset.field;
-      if (field === "tranPurpose") {
-        const parsed = parseTranPurposeText(e.target.value);
-        if (parsed.invalidTokens.length > 0) {
-          e.target.style.borderColor = "#c0392b";
-        } else {
-          e.target.style.borderColor = "";
-          loadedTransactions[idx].tranPurposeCodes = parsed.codes;
-        }
-        return;
-      }
-      loadedTransactions[idx][field] = e.target.value;
-      if (field === "typeCode") populateSubtypeSelect(idx);
-      if (field === "contactName") {
-        if (!contactsByName[e.target.value]) contactsByName[e.target.value] = guessContact(e.target.value);
-        renderContacts();
-      }
-    });
-  });
-
-  renderContacts();
-}
-
-function populateSubtypeSelect(idx) {
-  const t = loadedTransactions[idx];
-  const select = document.querySelector('select[data-idx="' + idx + '"][data-field="subCode"]');
-  const options = SUBTYPE_OPTIONS[t.typeCode] || [];
-  select.innerHTML = options.map(function(entry) {
-    const code = entry[0], label = entry[1];
-    return '<option value="' + code + '" ' + (code === t.subCode ? "selected" : "") + ">" + label + " (" + code + ")</option>";
-  }).join("");
-  if (!options.some(function(entry) { return entry[0] === t.subCode; })) {
-    t.subCode = options[0] ? options[0][0] : "";
-    select.value = t.subCode;
-  }
+  UI.renderTransactions(loadedTransactions, contactsByName);
+  UI.unlock("transactions");
 }
 
 function guessContact(name) {
@@ -1680,70 +1608,6 @@ function buildContactFromInfo(name, info) {
   if (info.contactId) base.contactId = info.contactId;
   if (info.recordKey) { base.recordKey = info.recordKey; base.recordEndpoint = info.recordEndpoint; }
   return base;
-}
-
-function renderContacts() {
-  const container = document.getElementById("contactsList");
-  container.innerHTML = "";
-  Object.keys(contactsByName).forEach(function(name) {
-    const c = contactsByName[name];
-    const card = document.createElement("div");
-    card.className = "contact-card";
-    card.innerHTML =
-      "<h4>" + escapeXml(name) + "</h4>" +
-      '<div class="row">' +
-        "<div><label>Contact Type</label><select data-name=\"" + escapeXml(name) + "\" data-field=\"type\">" +
-          CONTACT_TYPES.map(function(entry) {
-            const code = entry[0], label = entry[1];
-            return '<option value="' + code + '" ' + (code === c.type ? "selected" : "") + ">" + label + " (" + code + ")</option>";
-          }).join("") +
-        "</select></div>" +
-        '<div class="cn-individual" style="display:' + (c.type === "I" || c.type === "F" ? "flex" : "none") + '; gap:10px; flex:2;">' +
-          '<div><label>First</label><input data-name="' + escapeXml(name) + '" data-field="first" value="' + escapeXml(c.first) + '"></div>' +
-          '<div><label>Last</label><input data-name="' + escapeXml(name) + '" data-field="last" value="' + escapeXml(c.last) + '"></div>' +
-        "</div>" +
-        '<div class="cn-business" style="display:' + (c.type === "B" || c.type === "L" || c.type === "O" ? "block" : "none") + '; flex:2;">' +
-          '<label>Business / Org Name</label><input data-name="' + escapeXml(name) + '" data-field="business" value="' + escapeXml(c.business) + '">' +
-        "</div>" +
-        '<div class="cn-committee" style="display:' + (c.type === "C" || c.type === "P" ? "block" : "none") + '; flex:2;">' +
-          '<label>Committee Name</label><input data-name="' + escapeXml(name) + '" data-field="committeeName" value="' + escapeXml(c.committeeName) + '">' +
-        "</div>" +
-      "</div>" +
-      '<div class="small" style="margin:6px 0 4px;">Optional — fill in if this contact\'s yearly total exceeds $100:</div>' +
-      '<div class="row">' +
-        '<div><label>Street</label><input data-name="' + escapeXml(name) + '" data-field="street1" value="' + escapeXml(c.street1) + '"></div>' +
-        '<div><label>Street 2</label><input data-name="' + escapeXml(name) + '" data-field="street2" value="' + escapeXml(c.street2 || "") + '"></div>' +
-        '<div><label>City</label><input data-name="' + escapeXml(name) + '" data-field="city" value="' + escapeXml(c.city) + '"></div>' +
-        '<div><label>State</label><input data-name="' + escapeXml(name) + '" data-field="state" maxlength="2" value="' + escapeXml(c.state) + '"></div>' +
-        '<div><label>Zip</label><input data-name="' + escapeXml(name) + '" data-field="zip" value="' + escapeXml(c.zip) + '"></div>' +
-      "</div>" +
-      '<div class="row" style="display:' + (c.type === "I" || c.type === "F" ? "flex" : "none") + '">' +
-        '<div><label>Occupation</label><input data-name="' + escapeXml(name) + '" data-field="occupation" value="' + escapeXml(c.occupation) + '"></div>' +
-        "<div><label>Employment Status</label><select data-name=\"" + escapeXml(name) + "\" data-field=\"employmentStatus\">" +
-          '<option value="" ' + (!c.employmentStatus ? "selected" : "") + '>Has an employer</option>' +
-          '<option value="not-employed" ' + (c.employmentStatus === "not-employed" ? "selected" : "") + '>Not Employed</option>' +
-          '<option value="self-employed" ' + (c.employmentStatus === "self-employed" ? "selected" : "") + '>Self-Employed</option>' +
-        "</select></div>" +
-      "</div>" +
-      '<div class="row" style="display:' + (c.employmentStatus ? "none" : "flex") + '" data-employer-row="' + escapeXml(name) + '">' +
-        '<div><label>Employer</label><input data-name="' + escapeXml(name) + '" data-field="employerName" value="' + escapeXml(c.employerName) + '"></div>' +
-        '<div><label>Employer City</label><input data-name="' + escapeXml(name) + '" data-field="employerCity" value="' + escapeXml(c.employerCity) + '"></div>' +
-        '<div><label>Employer State</label><input data-name="' + escapeXml(name) + '" data-field="employerState" maxlength="2" value="' + escapeXml(c.employerState) + '"></div>' +
-      "</div>" +
-      '<div class="row">' +
-        '<div><label>Contact ID <span class="hint">The ID ORESTAR matches this contact on. Auto-filled if blank (derived from the Manager record) — edit here or directly in Manager to reconcile with an existing ORESTAR ID; either way, "Save Contact IDs to Manager" keeps this in sync.</span></label><input data-name="' + escapeXml(name) + '" data-field="contactId" value="' + escapeXml(c.contactId) + '"></div>' +
-      "</div>";
-    container.appendChild(card);
-  });
-
-  container.querySelectorAll("input, select").forEach(function(el) {
-    el.addEventListener("change", function(e) {
-      const name = e.target.dataset.name;
-      const field = e.target.dataset.field;
-      contactsByName[name][field] = e.target.value;
-      if (field === "type" || field === "employmentStatus") renderContacts();
-    });
-  });
 }
 
 document.getElementById("saveContactIdsBtn").addEventListener("click", async function() {
@@ -2011,7 +1875,6 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     "</campaign-finance-transactions>";
 
   const output = document.getElementById("xmlOutput");
-  output.style.display = "block";
   output.value = xml;
   document.getElementById("downloadBtn").disabled = false;
   document.getElementById("downloadBtn").onclick = function() {
@@ -2024,7 +1887,7 @@ document.getElementById("generateBtn").addEventListener("click", async function(
     URL.revokeObjectURL(url);
   };
   renderTxnIdTable();
-  document.getElementById("txnIdSection").style.display = "block";
+  UI.unlock("ids");
   const autoSaveText = autoSavedCount > 0 ? (" " + autoSavedCount + " new Contact ID(s) auto-saved to Manager.") : "";
   const autoSaveFailText = autoSaveFailures.length > 0
     ? ("\n\n⚠ " + autoSaveFailures.length + " Contact ID(s) failed to auto-save (XML still generated fine, just re-run \"Save Contact IDs to Manager\" to retry):\n" + autoSaveFailures.slice(0, 5).join("\n"))
@@ -2034,18 +1897,7 @@ document.getElementById("generateBtn").addEventListener("click", async function(
 });
 
 function renderTxnIdTable() {
-  const tbody = document.getElementById("txnIdBody");
-  tbody.innerHTML = "";
-  loadedTransactions.forEach(function(t, idx) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>" + escapeXml(t.date) + "</td>" +
-      "<td>" + escapeXml(t.contactName) + "</td>" +
-      "<td>" + escapeXml(t.amount) + "</td>" +
-      "<td>" + escapeXml(t.typeCode) + (t.subCode ? "/" + escapeXml(t.subCode) : "") + "</td>" +
-      '<td><input data-idx="' + idx + '" data-field="orestarTxnId" placeholder="numeric ID from ORESTAR"></td>';
-    tbody.appendChild(tr);
-  });
+  UI.renderTxnIds(loadedTransactions);
 }
 
 document.getElementById("saveTxnIdsBtn").addEventListener("click", async function() {
